@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dr-bench.local/schema/v0.1/scenario.schema.json",
+  "title": "DR-Bench scenario v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "split", "title", "world", "events", "task", "oracle"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "id": {"type": "string", "pattern": "^(dev|holdout)-[0-9]{3}$"},
+    "split": {"enum": ["dev", "holdout"]},
+    "title": {"type": "string", "minLength": 1},
+    "world": {"type": "object"},
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seq", "id", "operation", "path", "reason"],
+        "properties": {
+          "seq": {"type": "integer", "minimum": 1},
+          "id": {"type": "string", "minLength": 1},
+          "operation": {"enum": ["set", "delete", "append"]},
+          "path": {"type": "string", "pattern": "^/"},
+          "value": {},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "allOf": [{"if": {"properties": {"operation": {"enum": ["set", "append"]}}}, "then": {"required": ["value"]}}]
+      }
+    },
+    "task": {
+      "type": "object", "additionalProperties": false, "required": ["prompt"],
+      "properties": {"prompt": {"type": "string", "minLength": 1}}
+    },
+    "oracle": {
+      "type": "object", "additionalProperties": false, "required": ["final_world", "assertions"],
+      "properties": {
+        "final_world": {"type": "object"},
+        "assertions": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path", "op"],
+            "properties": {"path": {"type": "string"}, "op": {"enum": ["equals", "not_equals", "contains", "set_equals", "exists", "absent"]}, "value": {}},
+            "allOf": [{"if": {"properties": {"op": {"not": {"enum": ["exists", "absent"]}}}}, "then": {"required": ["value"]}}]
+          }
+        }
+      }
+    }
+  }
+}
