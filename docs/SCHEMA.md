@@ -8,10 +8,16 @@ Every record has a `candidate` partition and a `private` partition. Harnesses
 must call `candidate_view(scenario, phase)` and must never send a raw record to
 a system under test.
 
-Discovery views contain observable roles, visibility, pre-change knowledge,
-the knowledge change, prior decisions and their contemporaneous evidence and
-assumptions, current consequences, available recovery actions, and complexity
-metadata. They do not contain dependence or recovery ground truth.
+Discovery has two explicit conditions with the same private oracle:
+
+- `structured`: decisions retain `evidence_available` knowledge IDs and
+  structured assumptions. This is the provenance-available condition.
+- `implicit`: decisions omit both fields. Dependence must be inferred from
+  observable knowledge, changes, roles, timestamps, decisions, and intermediate
+  cross-agent transmissions. This is the provenance-hidden condition.
+
+Both conditions contain current consequences, available recovery actions, and
+complexity metadata. Neither contains dependence or recovery ground truth.
 
 Recovery views contain the same observable information plus
 `affected_decision_ids`. This is intentional: Recovery receives ground-truth
@@ -56,6 +62,18 @@ Each scenario declares controlled levels for agent hops (`0`, `1`, `2`, `4`),
 semantic distance, information transformation, and organizational boundary.
 The levels vary across DEV and HOLDOUT rather than collapsing into one hardness
 score.
+
+`candidate.transmissions` represents observable cross-agent messages,
+summaries, plans, and intermediate outputs. Each item identifies sender,
+recipient, time, content, and an optional predecessor transmission. The declared
+agent-hop level must equal the longest valid predecessor chain. Validation also
+requires each linked handoff to continue from the prior recipient and advance
+in time. Thus multi-hop levels are structural rather than descriptive metadata.
+
+The four bundled HOLDOUT cases have been inspected during benchmark design and
+are therefore design holdout only, not a final blind experimental holdout. A
+truly untouched set is intentionally deferred until immediately before
+mechanism tuning.
 
 The machine-readable structural schema is
 `dr_bench/schema/scenario.schema.json`; cross-reference invariants are enforced

@@ -3,6 +3,7 @@ import unittest
 from importlib.resources import files
 
 from dr_bench import load_scenario, load_scenarios, validate_scenario
+from dr_bench.validation import ScenarioValidationError, derive_agent_hops
 
 
 class ContractTests(unittest.TestCase):
@@ -38,6 +39,17 @@ class ContractTests(unittest.TestCase):
         self.assertEqual({s["complexity"]["semantic_distance"] for s in scenarios}, {"literal", "paraphrase", "semantic_transformation", "conceptual_consequence"})
         self.assertEqual({s["complexity"]["information_transformation"] for s in scenarios}, {"copy", "summary", "compression", "inference"})
         self.assertEqual({s["complexity"]["boundary"] for s in scenarios}, {"shared", "partial_visibility", "department", "different_authority"})
+
+    def test_declared_hops_are_derived_from_observable_chains(self):
+        for scenario in load_scenarios():
+            actual = derive_agent_hops(scenario["candidate"]["transmissions"])
+            self.assertEqual(actual, scenario["complexity"]["agent_hops"], scenario["id"])
+
+    def test_validation_rejects_metadata_only_hop_claim(self):
+        scenario = load_scenario("dev-006")
+        scenario["candidate"]["transmissions"] = scenario["candidate"]["transmissions"][:2]
+        with self.assertRaises(ScenarioValidationError):
+            validate_scenario(scenario)
 
     def test_unknown_id_fails(self):
         with self.assertRaises(KeyError):

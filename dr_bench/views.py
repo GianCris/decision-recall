@@ -11,15 +11,23 @@ PRIVATE_KEYS = {
 }
 
 
-def candidate_view(scenario: dict[str, Any], phase: str = "discovery") -> dict[str, Any]:
+def candidate_view(scenario: dict[str, Any], phase: str = "discovery", condition: str = "implicit") -> dict[str, Any]:
     """Return an isolated candidate-visible copy for Discovery or Recovery."""
     if phase not in {"discovery", "recovery"}:
         raise ValueError("phase must be 'discovery' or 'recovery'")
+    if condition not in {"structured", "implicit"}:
+        raise ValueError("condition must be 'structured' or 'implicit'")
     view = {
         "schema_version": scenario["schema_version"], "id": scenario["id"],
         "split": scenario["split"], "domain": scenario["domain"], "title": scenario["title"],
         "complexity": deepcopy(scenario["complexity"]), **deepcopy(scenario["candidate"]), "phase": phase,
     }
+    if phase == "discovery":
+        view["discovery_condition"] = condition
+        if condition == "implicit":
+            for decision in view["decisions"]:
+                decision.pop("evidence_available", None)
+                decision.pop("assumptions", None)
     if phase == "recovery":
         view["affected_decision_ids"] = [item["decision_id"] for item in scenario["private"]["decision_labels"] if item["materially_dependent"]]
     return view

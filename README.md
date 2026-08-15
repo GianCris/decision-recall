@@ -18,7 +18,8 @@ Python 3.11 or newer is required. There are no runtime dependencies.
 ```powershell
 python -m unittest discover -s tests -v
 python -m dr_bench list
-python -m dr_bench show dev-001 --phase discovery
+python -m dr_bench show dev-001 --phase discovery --condition implicit
+python -m dr_bench show dev-001 --phase discovery --condition structured
 python -m dr_bench show dev-001 --phase recovery
 python -m dr_bench evaluate dev-001 candidate.json --phase discovery
 ```

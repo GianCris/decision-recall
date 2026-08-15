@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     show = commands.add_parser("show", help="print candidate-visible scenario input")
     show.add_argument("scenario_id")
     show.add_argument("--phase", choices=("discovery", "recovery"), default="discovery")
+    show.add_argument("--condition", choices=("implicit", "structured"), default="implicit")
     run = commands.add_parser("evaluate", help="evaluate a candidate JSON file")
     run.add_argument("scenario_id")
     run.add_argument("candidate", type=Path)
@@ -29,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     scenario = load_scenario(args.scenario_id)
     if args.command == "show":
-        print(json.dumps(candidate_view(scenario, args.phase), indent=2))
+        print(json.dumps(candidate_view(scenario, args.phase, args.condition), indent=2))
         return 0
     candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
     result = evaluate(scenario, candidate, args.phase)

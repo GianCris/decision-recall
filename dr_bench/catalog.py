@@ -12,11 +12,13 @@ Split = Literal["dev", "holdout"]
 def load_scenarios(split: Split | None = None) -> list[dict[str, Any]]:
     splits = (split,) if split else ("dev", "holdout")
     scenarios: list[dict[str, Any]] = []
+    chains = json.loads(files("dr_bench").joinpath("data", "interaction_chains.json").read_text(encoding="utf-8"))
     for name in splits:
         resource = files("dr_bench").joinpath("data", f"{name}.jsonl")
         for line in resource.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 scenario = json.loads(line)
+                scenario["candidate"]["transmissions"] = chains[scenario["id"]]
                 validate_scenario(scenario)
                 scenarios.append(scenario)
     ids = [scenario["id"] for scenario in scenarios]
