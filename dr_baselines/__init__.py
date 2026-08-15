@@ -1,0 +1,17 @@
+"""Mechanism-neutral baseline scaffold for DR-Bench v0.1."""
+
+from .baselines import B0, B1, B2, BASE_TASK_PROMPT, REEVALUATION_INSTRUCTION, get_baseline
+from .config import ExperimentConfig, RetryPolicy
+from .models import DeterministicMockAdapter, ModelAdapter, ModelResponse
+from .output import OutputValidationError, parse_discovery_response
+from .records import RunRecord
+from .runner import run_baseline
+
+__all__ = [
+    "B0", "B1", "B2", "BASE_TASK_PROMPT", "REEVALUATION_INSTRUCTION",
+    "DeterministicMockAdapter", "ExperimentConfig", "ModelAdapter", "ModelResponse",
+    "OutputValidationError", "RetryPolicy", "RunRecord", "get_baseline",
+    "parse_discovery_response", "run_baseline",
+]
+
+__version__ = "0.1.0"

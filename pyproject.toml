@@ -13,7 +13,7 @@ dependencies = []
 dr-bench = "dr_bench.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["dr_bench*"]
+include = ["dr_bench*", "dr_baselines*"]
 
 [tool.setuptools.package-data]
 dr_bench = ["data/*.json", "data/*.jsonl", "schema/*.json"]
