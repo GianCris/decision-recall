@@ -38,13 +38,19 @@ Question:
 
 Can the system identify which decisions materially depended on changed knowledge?
 
-Ground truth must distinguish at least:
+Ground truth must distinguish dependency strength at least as:
 
 * independent;
 * supporting/non-material;
 * materially dependent;
-* critical dependence;
-* downstream dependence.
+* critical dependence.
+
+Downstream status must be represented separately from dependency strength:
+
+* downstream: true;
+* downstream: false.
+
+A downstream decision may independently be supporting/non-material, materially dependent, or critically dependent.
 
 Important negative cases must be included.
 
