@@ -263,3 +263,12 @@ After PASS, evaluate which Fortified Enterprise Fleet capabilities are structura
 * recovery and verification controls.
 
 Their inclusion must support the demonstrated behavior, not merely decorate the architecture.
+
+## Methodological result labels
+
+`COMPONENT PASS` and `FLEET-1 PASS` are distinct outcomes. A successful
+component or pivot result must not be reported as a successful FLEET-1 result.
+
+Near-perfect traces are a `FAIL` for the implicit-dependence claim. They may
+still justify a component-level or pivot result for reevaluation or recovery,
+but that result does not upgrade the trace to `FLEET-1 PASS`.
