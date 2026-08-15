@@ -7,10 +7,14 @@ name = "dr-bench"
 version = "0.1.0"
 description = "A mechanism-agnostic benchmark for decision recovery"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "google-auth==2.56.3",
+  "google-genai==2.14.0",
+]
 
 [project.scripts]
 dr-bench = "dr_bench.cli:main"
+dr-baseline-sanity = "dr_baselines.sanity:main"
 
 [tool.setuptools.packages.find]
 include = ["dr_bench*", "dr_baselines*"]
