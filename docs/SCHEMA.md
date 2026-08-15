@@ -1,45 +1,62 @@
-# DR-Bench v0.1 contract
+# DR-Bench v0.1 experimental contract
 
-Each JSONL record is a standalone scenario. The normative machine-readable
-shape is in `dr_bench/schema/scenario.schema.json`.
+DR-Bench evaluates two phases independently under the frozen FLEET-1 protocol.
 
-## Scenario lifecycle
+## Public/private boundary
 
-1. `world` is the initial JSON object visible to a benchmark harness.
-2. `events` are applied by ascending `seq`. Operations use JSON Pointer paths.
-3. The system under test receives whatever history/context the experimenter
-   chooses, plus `task.prompt`.
-4. The system returns any JSON value.
-5. `oracle.assertions` deterministically score that value.
+Every record has a `candidate` partition and a `private` partition. Harnesses
+must call `candidate_view(scenario, phase)` and must never send a raw record to
+a system under test.
 
-The benchmark specifies neither memory nor retrieval. A harness may expose the
-whole timeline, distribute events across agents, or hide history behind its own
-mechanism. Results should document that experimental protocol.
+Discovery views contain observable roles, visibility, pre-change knowledge,
+the knowledge change, prior decisions and their contemporaneous evidence and
+assumptions, current consequences, available recovery actions, and complexity
+metadata. They do not contain dependence or recovery ground truth.
 
-## Event operations
+Recovery views contain the same observable information plus
+`affected_decision_ids`. This is intentional: Recovery receives ground-truth
+affected decisions so Discovery advantage cannot leak into Recovery. Strength,
+paths, still-justified labels, consequence labels, expected actions, and
+expected final state remain private.
 
-- `set`: create or replace an object member.
-- `delete`: remove an existing object member.
-- `append`: append one JSON value to an existing array.
+## Discovery contract
 
-All operations are deterministic. Events must have unique, strictly increasing
-positive sequence numbers.
+A Discovery candidate returns:
 
-## Assertions
+```json
+{"decisions":[{"decision_id":"d1","materially_dependent":true,"dependency_strength":"critical","still_justified":false}]}
+```
 
-Assertion paths point into the candidate response. Supported operators are:
+The oracle makes precision, recall, F1, false positives, false negatives,
+strength accuracy, still-justified accuracy, and multi-hop recall objectively
+computable. `independent` and `supporting` are non-material; `material` and
+`critical` are materially dependent. Downstream status is a separate label.
 
-- `equals` and `not_equals` (strict JSON type and value for `equals`)
-- `contains` (string substring, array member, or object key)
-- `set_equals` (order-insensitive array equality; scalar members only)
-- `exists` and `absent`
+## Recovery contract
 
-The score is passed assertions divided by total assertions. A scenario passes
-only at 1.0. The `oracle.final_world` entries are authoring-time invariants used
-to catch inconsistent scenario data; they are not candidate assertions.
+A Recovery candidate returns selected public action IDs and an execution step:
 
-## Holdout note
+```json
+{"action_ids":["a1"],"at_step":1}
+```
 
-The four holdout scenarios ship with v0.1 so the package is reproducible. Their
-oracle data should not be supplied to a system under test. This is a structural
-holdout, not a secret test set.
+Actions expose their observable effects, cost, responsible role, and recovery
+window. The private oracle identifies required and protected consequences,
+desired repaired values, expected minimum action set, and final-world
+invariants. The evaluator reports repair correctness, wrongful rollback,
+unnecessary disruption, recovered value, recovery-window capture, and final
+world-state correctness.
+
+Action effects are applied in submitted order to a deep copy of the observable
+world. Simulation is deterministic.
+
+## Complexity axes
+
+Each scenario declares controlled levels for agent hops (`0`, `1`, `2`, `4`),
+semantic distance, information transformation, and organizational boundary.
+The levels vary across DEV and HOLDOUT rather than collapsing into one hardness
+score.
+
+The machine-readable structural schema is
+`dr_bench/schema/scenario.schema.json`; cross-reference invariants are enforced
+by `validate_scenario`.

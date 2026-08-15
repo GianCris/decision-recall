@@ -1,36 +1,30 @@
 # DR-Bench
 
-DR-Bench v0.1 is a small, mechanism-agnostic benchmark for testing whether an
-agent can act on decisions after the surrounding world changes.
+DR-Bench v0.1 is a mechanism-agnostic benchmark for Material Decision
+Dependence, selective reevaluation, and minimum-disruption recovery.
 
-The initial release contains:
+The frozen dataset contains 16 deterministic scenarios: 12 development and 4
+holdout. It deliberately includes independent, supporting/non-material,
+material, and critical dependencies plus adversarial related-but-unaffected
+decisions and consequences.
 
-- 16 deterministic scenarios: 12 development and 4 holdout
-- a versioned JSON scenario schema
-- a minimal, deterministic world-state simulator
-- validators for both scenario definitions and candidate responses
-- a command-line runner and standard-library-only tests
-
-It intentionally contains no Gemini integration, Decision Recall mechanism,
-ADK Fleet integration, or UI.
+It contains no candidate mechanism, baseline, Gemini integration, ADK/Fleet
+infrastructure, or UI.
 
 ## Quick start
 
-Python 3.11 or newer is required. No runtime dependencies are needed.
+Python 3.11 or newer is required. There are no runtime dependencies.
 
 ```powershell
 python -m unittest discover -s tests -v
 python -m dr_bench list
-python -m dr_bench show dev-001
-python -m dr_bench evaluate dev-001 candidate.json
+python -m dr_bench show dev-001 --phase discovery
+python -m dr_bench show dev-001 --phase recovery
+python -m dr_bench evaluate dev-001 candidate.json --phase discovery
 ```
 
-A candidate file is any JSON value. Each scenario declares assertions against
-that value, so the benchmark does not prescribe how a system arrives at its
-answer. For example, `dev-001` expects:
+The public API `candidate_view(scenario, phase)` is the only supported way to
+hand scenario input to a candidate. Raw loaded records contain a private oracle
+and must remain inside the benchmark harness.
 
-```json
-{"vendor": "Nimbus", "region": "eu-west"}
-```
-
-See [docs/SCHEMA.md](docs/SCHEMA.md) for the scenario and evaluation contract.
+See [docs/SCHEMA.md](docs/SCHEMA.md) for the experimental contract.
