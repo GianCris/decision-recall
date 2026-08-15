@@ -10,3 +10,10 @@
 | Video max 4 minutes                                                                | Devpost rules   | 2026-08-15    | La demo debe ser entendible y mostrar funcionamiento real                       | VERIFIED |
 | Submission must be reproducible and evaluable                                      | Devpost rules   | 2026-08-15    | README/setup/deployment deben quedar claros                                     | VERIFIED |
 | Google Cloud credits request deadline: Aug 28, 2026 12:00 p.m. PT, while available | Devpost rules   | 2026-08-15    | Conviene solicitar créditos antes del deadline aunque todavía no los consumamos | VERIFIED |
+
+
+
+* `Repository may be private or public for submission; if private, access must be granted to testing@devpost.com and cloudhackathons@google.com.` 
+* `Judging explicitly rewards a public GitHub repository with clean architecture diagram and reproducible setup instructions.` 
+* `Project must be newly created during the Aug 3–31, 2026 submission period; pre-existing code/work incorporated must be disclosed.` 
+* `The application must support English; submission materials must be in English or provide English translation/subtitles.` 
