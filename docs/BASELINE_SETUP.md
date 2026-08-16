@@ -73,14 +73,14 @@ After the runner implementation is committed and approved, prepare a new output
 directory without making provider calls:
 
 ```powershell
-python -m dr_baselines.dev_experiment --output-dir dev-baseline-output --prepare
+python -m dr_baselines.dev_experiment --output-dir dev-baseline-output-v4 --prepare
 ```
 
 Audit the frozen `execution_plan.json` and `experiment_manifest.json`, then use
 the same directory for the explicit 72-call execution:
 
 ```powershell
-python -m dr_baselines.dev_experiment --output-dir dev-baseline-output --execute
+python -m dr_baselines.dev_experiment --output-dir dev-baseline-output-v4 --execute
 ```
 
 Execution refuses changed plan bytes, changed manifest design fields, a changed
@@ -88,15 +88,27 @@ Git commit, tracked source modifications, existing run artifacts, non-DEV IDs,
 or any output path containing a sealed-holdout component. Untracked historical
 output directories do not affect the tracked-source cleanliness check.
 
-The `dev-baselines-v0.3` transport policy uses the public `google-genai`
+The `dev-baselines-v0.4` transport policy uses the public `google-genai`
 `HttpOptions` API with `timeout=120000` milliseconds and
 `HttpRetryOptions(attempts=1)`. The latter counts the original request and
-therefore disables SDK retries. An operator interruption writes an append-only
-`attempt_lifecycle.jsonl` event and an aborted, non-official `summary.json`;
+therefore disables SDK retries. A scientific slot is one frozen matrix position;
+a delivery attempt is one infrastructure attempt to obtain that slot's single
+model response. The harness permits at most four delivery attempts only for the
+frozen pre-response transient classes, with deterministic 5/10/20-second
+backoff and no jitter. This schedule is a precommitted harness policy, not a
+provider guarantee.
+
+The first model response permanently closes its scientific slot. Incorrect or
+invalid model responses are never retried. Exhausted or nonretryable delivery
+failures create one terminal failed-slot record, receive no evaluation or gap
+filling, and do not stop the remaining matrix; any such slot makes the result
+ineligible for official-result status. Delivery evidence is appended to
+`delivery_attempts.jsonl`.
+
+An operator interruption writes an append-only lifecycle event and an aborted,
+non-official `summary.json`;
 the interrupted directory cannot be resumed or reused.
 
-Version 0.3 adds a fixed, sequential 10-second delay before every planned call
-after the first, with no jitter, adaptation, or concurrency. A returned but
-invalid model response remains eligible model behavior and execution continues.
-Any provider error is persisted once and immediately aborts the run as partial,
-non-official, with no delay, retry, replacement call, or automatic new run.
+The fixed, sequential 10-second delay remains between terminal scientific
+slots, with no delay before slot one or after slot 72, and no jitter,
+adaptation, or concurrency.

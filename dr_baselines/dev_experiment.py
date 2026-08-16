@@ -14,7 +14,9 @@ from pathlib import Path
 from time import perf_counter, sleep
 from typing import Any, Callable
 
-from google.genai import types
+import httpx
+import requests
+from google.genai import errors as genai_errors, types
 
 from dr_bench import evaluate_discovery, load_scenario
 
@@ -34,7 +36,7 @@ from .output import (
 from .records import RunRecord
 from .runner import run_baseline, with_structured_output_metadata
 
-EXPERIMENT_VERSION = "dev-baselines-v0.3"
+EXPERIMENT_VERSION = "dev-baselines-v0.4"
 SDK_PACKAGE = "google-genai"
 SDK_VERSION = "2.14.0"
 DEV_SCENARIOS = tuple(f"dev-{number:03d}" for number in range(1, 13))
@@ -48,11 +50,15 @@ SCHEMA_SHA256 = hashlib.sha256(
 ORDER_RULE = "odd:1=B0_then_B1,2=B1_then_B0,3=B0_then_B1;even:1=B1_then_B0,2=B0_then_B1,3=B1_then_B0"
 PLAN_FILENAME = "execution_plan.json"
 MANIFEST_FILENAME = "experiment_manifest.json"
-ATTEMPT_LIFECYCLE_FILENAME = "attempt_lifecycle.jsonl"
+ATTEMPT_LIFECYCLE_FILENAME = "delivery_attempts.jsonl"
 TRANSPORT_TIMEOUT_MS = 120_000
 TRANSPORT_TIMEOUT_SECONDS = 120
 TRANSPORT_ATTEMPTS = 1
 INTER_CALL_DELAY_SECONDS = 10
+MAX_DELIVERY_ATTEMPTS = 4
+DELIVERY_BACKOFF_SECONDS = (5, 10, 20)
+RETRYABLE_HTTP_STATUS_CODES = (408, 429, 500, 502, 503, 504)
+DELIVERY_POLICY_VERSION = "delivery-v0.1"
 
 
 class DevExperimentError(RuntimeError):
@@ -168,6 +174,7 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
         "baseline_allowlist": list(DEV_BASELINES),
         "repetitions": list(DEV_REPETITIONS),
         "total_planned_calls": TOTAL_CALLS,
+        "scientific_slots_planned": TOTAL_CALLS,
         "prompt_sha256": PROMPT_SHA256,
         "response_schema_version": DISCOVERY_RESPONSE_SCHEMA_VERSION,
         "response_schema_sha256": SCHEMA_SHA256,
@@ -182,7 +189,23 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
                 "penalties", "stop_sequences", "tools", "max_output_tokens",
             )
         },
-        "retry_policy": {"automatic_retries": False, "max_attempts_per_plan_entry": 1},
+        "retry_policy": {
+            "sdk_attempts": TRANSPORT_ATTEMPTS,
+            "harness_max_delivery_attempts_per_scientific_slot": MAX_DELIVERY_ATTEMPTS,
+            "retryable_http_status_codes": list(RETRYABLE_HTTP_STATUS_CODES),
+            "retryable_timeout_exceptions": ["TimeoutError", "httpx.TimeoutException", "requests.Timeout"],
+            "backoff_seconds": list(DELIVERY_BACKOFF_SECONDS),
+            "jitter": False,
+            "delivery_policy_version": DELIVERY_POLICY_VERSION,
+            "max_delivery_attempts_per_scientific_slot": MAX_DELIVERY_ATTEMPTS,
+            "delivery_retry_backoff_seconds": list(DELIVERY_BACKOFF_SECONDS),
+            "delivery_retry_jitter": False,
+            "retryable_transport_timeout": True,
+            "sdk_automatic_retry_attempts": TRANSPORT_ATTEMPTS,
+            "first_model_response_wins": True,
+            "retry_after_model_response": False,
+            "retry_after_invalid_model_response": False,
+        },
         "transport": {
             "timeout_ms": TRANSPORT_TIMEOUT_MS,
             "timeout_seconds": TRANSPORT_TIMEOUT_SECONDS,
@@ -192,16 +215,28 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
         },
         "pacing": {
             "inter_call_delay_seconds": INTER_CALL_DELAY_SECONDS,
+            "inter_scientific_slot_delay_seconds": INTER_CALL_DELAY_SECONDS,
             "first_call_pre_delay": False,
+            "first_slot_pre_delay": False,
             "jitter": False,
             "adaptive_throttling": False,
             "concurrency": 1,
-            "policy": "fixed delay before each planned slot after the first",
+            "policy": "fixed delay between terminal scientific slots; none before first or after last",
         },
         "failure_policy": {
             "invalid_response": "persist_and_continue_no_retry",
-            "provider_error": "persist_and_abort_no_retry",
+            "provider_delivery_failure": "persist_terminal_slot_and_continue_matrix",
             "operator_interrupt": "persist_interruption_and_abort_no_retry",
+            "exhausted_delivery_attempts": "persist_slot_failure_and_continue",
+            "nonretryable_provider_failure": "persist_slot_failure_and_continue",
+            "replacement_slots": False,
+            "reuse_historical_responses": False,
+        },
+        "official_eligibility_policy": {
+            "scientific_slots_processed": TOTAL_CALLS,
+            "model_responses_obtained": TOTAL_CALLS,
+            "provider_delivery_failed_slots": 0,
+            "experiment_abort": False,
         },
         "execution_plan_sha256": plan_sha,
         "paired_order_rule": ORDER_RULE,
@@ -281,6 +316,11 @@ def _experiment_config() -> ExperimentConfig:
                 ("pacing_jitter", False),
                 ("adaptive_throttling", False),
                 ("concurrency", 1),
+                ("delivery_policy_version", DELIVERY_POLICY_VERSION),
+                ("max_delivery_attempts_per_scientific_slot", MAX_DELIVERY_ATTEMPTS),
+                ("delivery_backoff_seconds", DELIVERY_BACKOFF_SECONDS),
+                ("retryable_http_status_codes", RETRYABLE_HTTP_STATUS_CODES),
+                ("sdk_transport_attempts", TRANSPORT_ATTEMPTS),
             ),
         ),
         True,
@@ -319,7 +359,12 @@ def _generation_metadata() -> dict[str, Any]:
     }
 
 
-def _run_metadata(entry: dict[str, Any], manifest: dict[str, Any], started: str, completed: str) -> dict[str, Any]:
+def _run_metadata(
+    entry: dict[str, Any], manifest: dict[str, Any], started: str, completed: str,
+    delivery_attempts_used: int, terminal_state: str,
+    terminal_failure_classification: str | None = None,
+    terminal_http_status_code: int | None = None,
+) -> dict[str, Any]:
     return {
         "pair_id": entry["pair_id"],
         "global_call_index": entry["global_call_index"],
@@ -347,7 +392,29 @@ def _run_metadata(entry: dict[str, Any], manifest: dict[str, Any], started: str,
             "timeout_seconds": TRANSPORT_TIMEOUT_SECONDS,
             "attempts": TRANSPORT_ATTEMPTS,
         },
+        "delivery": {
+            "policy_version": DELIVERY_POLICY_VERSION,
+            "attempts_used": delivery_attempts_used,
+            "max_attempts": MAX_DELIVERY_ATTEMPTS,
+            "terminal_state": terminal_state,
+            "terminal_failure_classification": terminal_failure_classification,
+            "terminal_http_status_code": terminal_http_status_code,
+        },
     }
+
+
+def _provider_status_code(error: Exception) -> int | None:
+    code = getattr(error, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _retryable_delivery_failure(error: Exception) -> tuple[bool, str, int | None]:
+    status = _provider_status_code(error)
+    if isinstance(error, genai_errors.APIError):
+        return status in RETRYABLE_HTTP_STATUS_CODES, "http_status", status
+    if isinstance(error, (TimeoutError, httpx.TimeoutException, requests.Timeout)):
+        return True, "timeout", status
+    return False, "non_retryable_exception", status
 
 
 def _provider_error_record(entry: dict[str, Any], adapter: Any, error: Exception, latency_ms: float) -> RunRecord:
@@ -478,19 +545,15 @@ def build_summary(
     evaluated: list[tuple[dict[str, Any], dict[str, Any]]],
     scenarios: dict[str, dict[str, Any]],
     abort_reason: str | None,
-    provider_invocations_started: int | None = None,
-    provider_invocations_completed: int | None = None,
+    delivery_stats: dict[str, Any] | None = None,
     interrupted_position: dict[str, Any] | None = None,
     provider_error_position: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider_error_count = sum(run["validation_status"] == "provider_error" for run in runs)
-    started_count = provider_invocations_started if provider_invocations_started is not None else len(runs)
-    completed = (
-        len(runs) == TOTAL_CALLS
-        and started_count == TOTAL_CALLS
-        and provider_error_count == 0
-        and abort_reason is None
-    )
+    completed = len(runs) == TOTAL_CALLS and abort_reason is None
+    model_response_count = sum(run["validation_status"] != "provider_error" for run in runs)
+    official = completed and model_response_count == TOTAL_CALLS and provider_error_count == 0
+    delivery_stats = delivery_stats or {}
     per_baseline: dict[str, Any] = {}
     for baseline_id in DEV_BASELINES:
         baseline_runs = [run for run in runs if run["baseline_id"] == baseline_id]
@@ -560,23 +623,44 @@ def build_summary(
     return {
         "experiment_version": EXPERIMENT_VERSION,
         "experiment_status": "completed" if completed else "aborted",
-        "aggregate_status": "COMPLETE" if completed else "PARTIAL / ABORTED",
-        "official_result_eligible": completed,
+        "aggregate_status": (
+            "COMPLETE" if official else
+            "COMPLETE MATRIX / INCOMPLETE NON-OFFICIAL PERFORMANCE" if completed else
+            "PARTIAL / ABORTED"
+        ),
+        "official_result_eligible": official,
         "planned_calls": len(plan),
-        "attempted_calls": provider_invocations_started if provider_invocations_started is not None else len(runs),
-        "provider_invocations_started": provider_invocations_started if provider_invocations_started is not None else len(runs),
-        "completed_provider_calls": provider_invocations_completed if provider_invocations_completed is not None else sum(run["validation_status"] != "provider_error" for run in runs),
+        "scientific_slots_planned": len(plan),
+        "scientific_slots_processed": len(runs),
+        "scientific_slots_with_model_response": model_response_count,
+        "scientific_slots_provider_delivery_failed": provider_error_count,
+        "provider_delivery_failed_slots": provider_error_count,
+        "attempted_calls": delivery_stats.get("total_delivery_attempts", len(runs)),
+        "provider_invocations_started": delivery_stats.get("total_delivery_attempts", len(runs)),
+        "completed_provider_calls": model_response_count,
         "persisted_run_records": len(runs),
         "persisted_evaluations": len(evaluated),
         "valid_runs": sum(run["validation_status"] == "valid" for run in runs),
         "invalid_runs": sum(run["validation_status"] == "invalid" for run in runs),
-        "provider_error_runs": provider_error_count,
-        "abort_reason": abort_reason,
-        "last_global_call_index_attempted": (
-            interrupted_position["global_call_index"]
-            if interrupted_position and interrupted_position["provider_invocation_started"]
-            else (runs[-1]["global_call_index"] if runs else None)
+        "invalid_model_response_rate": (
+            sum(run["validation_status"] == "invalid" for run in runs) / model_response_count
+            if model_response_count else None
         ),
+        "provider_error_runs": provider_error_count,
+        "delivery": delivery_stats,
+        "total_delivery_attempts": delivery_stats.get("total_delivery_attempts", len(runs)),
+        "slots_succeeding_on_attempt_1": delivery_stats.get("model_responses_on_attempt_1", 0),
+        "slots_succeeding_after_delivery_retry": delivery_stats.get("model_responses_after_retry", 0),
+        "delivery_attempts_by_attempt_number": delivery_stats.get("attempts_by_number", {}),
+        "retryable_delivery_failures": delivery_stats.get("retryable_failures", 0),
+        "nonretryable_delivery_failures": delivery_stats.get("non_retryable_failures", 0),
+        "performance_aggregate_scope": (
+            "conditional_on_valid_model_responses" if any(run["validation_status"] == "invalid" for run in runs)
+            else "all_model_responses"
+        ),
+        "abort_reason": abort_reason,
+        "last_global_call_index_attempted": interrupted_position["global_call_index"] if interrupted_position else (runs[-1]["global_call_index"] if runs else None),
+        "last_global_call_index_processed": runs[-1]["global_call_index"] if runs else None,
         "interrupted_position": interrupted_position,
         "provider_error_position": provider_error_position,
         "per_baseline": per_baseline,
@@ -602,64 +686,133 @@ def execute_experiment(
     runs: list[dict[str, Any]] = []
     evaluated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     abort_reason: str | None = None
-    provider_invocations_started = 0
-    provider_invocations_completed = 0
     interrupted_position: dict[str, Any] | None = None
     provider_error_position: dict[str, Any] | None = None
     lifecycle_path = output_dir / ATTEMPT_LIFECYCLE_FILENAME
+    delivery_stats: dict[str, Any] = {
+        "policy_version": DELIVERY_POLICY_VERSION,
+        "max_attempts_per_scientific_slot": MAX_DELIVERY_ATTEMPTS,
+        "backoff_seconds": list(DELIVERY_BACKOFF_SECONDS),
+        "total_delivery_attempts": 0,
+        "attempts_by_number": {str(number): 0 for number in range(1, MAX_DELIVERY_ATTEMPTS + 1)},
+        "retryable_failures": 0,
+        "non_retryable_failures": 0,
+        "model_responses_on_attempt_1": 0,
+        "model_responses_after_retry": 0,
+        "failure_breakdown": {},
+    }
     adapter = adapter_factory()
     try:
         for entry in plan:
             lifecycle_stage = "planned"
+            delivery_attempt_number: int | None = None
+            delivery_attempt_started = False
             try:
                 if entry["global_call_index"] > 1:
-                    lifecycle_stage = "inter_call_delay"
+                    lifecycle_stage = "inter_slot_pacing"
                     sleep_fn(INTER_CALL_DELAY_SECONDS)
                     _append_jsonl(lifecycle_path, {
                         **entry,
-                        "event": "inter_call_delay_completed",
+                        "event": "inter_slot_pacing_completed",
                         "timestamp_utc": _utc_now(),
                         "delay_seconds": INTER_CALL_DELAY_SECONDS,
                     })
-                    lifecycle_stage = "planned"
                 started_at = _utc_now()
                 started = perf_counter()
-                _append_jsonl(lifecycle_path, {
-                    **entry,
-                    "event": "provider_invocation_started",
-                    "timestamp_utc": started_at,
-                })
-                provider_invocations_started += 1
-                lifecycle_stage = "provider_invocation_in_flight"
-                try:
-                    record = run_baseline(
-                        entry["baseline_id"],
-                        public_scenarios[entry["scenario_id"]],
-                        adapter,
-                        config,
-                        repetition_id=entry["repetition_id"],
-                        structured_output=True,
-                    )
-                except KeyboardInterrupt:
-                    raise
-                except Exception as error:
-                    record = _provider_error_record(entry, adapter, error, (perf_counter() - started) * 1000)
+                last_error: Exception | None = None
+                last_failure_classification: str | None = None
+                last_http_status_code: int | None = None
+                record: RunRecord | None = None
+                for attempt_number in range(1, MAX_DELIVERY_ATTEMPTS + 1):
+                    delivery_attempt_number = attempt_number
+                    delivery_attempt_started = True
+                    delivery_stats["total_delivery_attempts"] += 1
+                    delivery_stats["attempts_by_number"][str(attempt_number)] += 1
+                    attempt_started_at = _utc_now()
                     _append_jsonl(lifecycle_path, {
                         **entry,
-                        "event": "provider_invocation_failed",
-                        "timestamp_utc": _utc_now(),
-                        "error_type": type(error).__name__,
+                        "event": "delivery_attempt_started",
+                        "delivery_attempt_number": attempt_number,
+                        "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+                        "started_at_utc": attempt_started_at,
                     })
-                else:
-                    provider_invocations_completed += 1
-                    lifecycle_stage = "provider_invocation_completed"
-                    _append_jsonl(lifecycle_path, {
-                        **entry,
-                        "event": "provider_invocation_completed",
-                        "timestamp_utc": _utc_now(),
-                    })
+                    lifecycle_stage = "provider_invocation_in_flight"
+                    try:
+                        record = run_baseline(
+                            entry["baseline_id"], public_scenarios[entry["scenario_id"]], adapter,
+                            config, repetition_id=entry["repetition_id"], structured_output=True,
+                        )
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as error:
+                        last_error = error
+                        retryable, classification, status_code = _retryable_delivery_failure(error)
+                        last_failure_classification = classification
+                        last_http_status_code = status_code
+                        key = str(status_code) if status_code is not None else classification
+                        delivery_stats["failure_breakdown"][key] = delivery_stats["failure_breakdown"].get(key, 0) + 1
+                        delivery_stats["retryable_failures" if retryable else "non_retryable_failures"] += 1
+                        will_retry = retryable and attempt_number < MAX_DELIVERY_ATTEMPTS
+                        next_backoff = DELIVERY_BACKOFF_SECONDS[attempt_number - 1] if will_retry else None
+                        _append_jsonl(lifecycle_path, {
+                            **entry,
+                            "event": "delivery_attempt_completed",
+                            "delivery_attempt_number": attempt_number,
+                            "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+                            "started_at_utc": attempt_started_at,
+                            "completed_at_utc": _utc_now(),
+                            "outcome": "pre_response_failure",
+                            "model_response_obtained": False,
+                            "error_type": type(error).__name__,
+                            "http_status_code": status_code,
+                            "failure_classification": classification,
+                            "retryable": retryable,
+                            "will_retry": will_retry,
+                            "next_backoff_seconds": next_backoff,
+                        })
+                        delivery_attempt_started = False
+                        if not will_retry:
+                            break
+                        lifecycle_stage = "delivery_backoff"
+                        sleep_fn(next_backoff)
+                        continue
+                    else:
+                        _append_jsonl(lifecycle_path, {
+                            **entry,
+                            "event": "delivery_attempt_completed",
+                            "delivery_attempt_number": attempt_number,
+                            "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+                            "started_at_utc": attempt_started_at,
+                            "completed_at_utc": _utc_now(),
+                            "outcome": "model_response_obtained",
+                            "model_response_obtained": True,
+                            "error_type": None,
+                            "http_status_code": None,
+                            "failure_classification": None,
+                            "retryable": False,
+                            "will_retry": False,
+                            "next_backoff_seconds": None,
+                        })
+                        delivery_attempt_started = False
+                        if attempt_number == 1:
+                            delivery_stats["model_responses_on_attempt_1"] += 1
+                        else:
+                            delivery_stats["model_responses_after_retry"] += 1
+                        break
+                if record is None:
+                    assert last_error is not None
+                    record = _provider_error_record(entry, adapter, last_error, (perf_counter() - started) * 1000)
                 completed_at = _utc_now()
-                run_value = {**asdict(record), **_run_metadata(entry, manifest, started_at, completed_at)}
+                terminal_state = "provider_delivery_failed" if record.validation_status == "provider_error" else "model_response_obtained"
+                run_value = {
+                    **asdict(record),
+                    **_run_metadata(
+                        entry, manifest, started_at, completed_at, delivery_attempt_number or 0,
+                        terminal_state, last_failure_classification if record.validation_status == "provider_error" else None,
+                        last_http_status_code if record.validation_status == "provider_error" else None,
+                    ),
+                }
+                lifecycle_stage = "run_record_persisting"
                 _append_jsonl(output_dir / "runs.jsonl", run_value)
                 runs.append(run_value)
                 lifecycle_stage = "run_record_persisted"
@@ -671,6 +824,7 @@ def execute_experiment(
                 if record.validation_status == "valid" and record.parsed_candidate_response is not None:
                     evaluation = evaluate_discovery(scenarios[entry["scenario_id"]], record.parsed_candidate_response)
                     evaluation_value = asdict(evaluation)
+                    lifecycle_stage = "evaluation_persisting"
                     _append_jsonl(output_dir / "evaluations.jsonl", {
                         "global_call_index": entry["global_call_index"],
                         "pair_id": entry["pair_id"],
@@ -687,7 +841,6 @@ def execute_experiment(
                         "timestamp_utc": _utc_now(),
                     })
                 if record.validation_status == "provider_error":
-                    abort_reason = "provider_error"
                     provider_error_position = {
                         "global_call_index": entry["global_call_index"],
                         "scenario_id": entry["scenario_id"],
@@ -699,7 +852,6 @@ def execute_experiment(
                         "order_within_pair": entry["order_within_pair"],
                         "provider_error": record.provider_error,
                     }
-                    break
             except KeyboardInterrupt:
                 abort_reason = "operator_interrupt"
                 interrupted_position = {
@@ -715,7 +867,9 @@ def execute_experiment(
                     "interruption_type": "KeyboardInterrupt",
                     "abort_reason": "operator_interrupt",
                     "lifecycle_stage": lifecycle_stage,
-                    "provider_invocation_started": lifecycle_stage != "planned",
+                    "delivery_attempt_number": delivery_attempt_number,
+                    "delivery_attempt_started": delivery_attempt_started,
+                    "provider_invocation_started": lifecycle_stage == "provider_invocation_in_flight",
                 }
                 _append_jsonl(lifecycle_path, {**interrupted_position, "event": "experiment_interrupted"})
                 break
@@ -728,8 +882,7 @@ def execute_experiment(
         evaluated,
         scenarios,
         abort_reason,
-        provider_invocations_started,
-        provider_invocations_completed,
+        delivery_stats,
         interrupted_position,
         provider_error_position,
     )
