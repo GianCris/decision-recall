@@ -34,6 +34,7 @@ def run_baseline(
         prompt_version=baseline.prompt_version, experiment_config_version=config.version,
         model_adapter=adapter.identifier, raw_model_response=response.text,
         parsed_candidate_response=parsed, validation_status=status, validation_error=error,
+        experiment_config=config.to_dict(),
         model_name=response.model_name or config.model_name,
         model_version=response.model_version or config.model_version,
         latency_ms=response.latency_ms, input_tokens=response.input_tokens,

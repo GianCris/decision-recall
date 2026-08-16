@@ -17,6 +17,8 @@ class RunRecord:
     parsed_candidate_response: dict[str, Any] | None
     validation_status: str
     validation_error: str | None = None
+    provider_error: str | None = None
+    experiment_config: dict[str, Any] | None = None
     model_name: str | None = None
     model_version: str | None = None
     latency_ms: float | None = None

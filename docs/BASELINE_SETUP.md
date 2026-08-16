@@ -38,3 +38,18 @@ python -m dr_baselines.sanity --execute
 
 Running the module without `--execute` refuses to call the provider. Imports and
 tests never construct a provider client or make a network request.
+
+## Fixed baseline pilot
+
+The pilot command is fixed to `dev-005`, `dev-002`, and `dev-006`; B0, B1, and
+B2; and one repetition, for exactly nine calls. It refuses to start without
+explicit opt-in and requires a new output directory:
+
+```powershell
+python -m dr_baselines.pilot --output-dir pilot-output --execute
+```
+
+The directory must not already exist. It receives append-only `runs.jsonl` and
+`evaluations.jsonl` files plus a deterministic `summary.json`. Invalid responses
+and isolated provider errors are retained and never retried. Authentication or
+other systemic client-configuration failures abort the remaining matrix.

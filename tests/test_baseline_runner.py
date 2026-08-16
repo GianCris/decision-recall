@@ -51,6 +51,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(required <= value.keys())
         for field in ("model_name", "model_version", "latency_ms", "input_tokens", "output_tokens", "repetition_id"):
             self.assertIn(field, value)
+        self.assertEqual(value["experiment_config"]["version"], "0.1")
 
     def test_configuration_is_versioned_and_unfrozen_values_are_unset(self):
         config = ExperimentConfig()
