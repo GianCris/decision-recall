@@ -1,0 +1,17 @@
+{
+  "dataset_id": "decision-recall-sealed-final-holdout-v0.1",
+  "holdout_version": "0.1",
+  "base_commit": "f719cb500831a5c97bfc70ae18f1c44ce7132c80",
+  "purpose": "final_generalization_evaluation",
+  "claim_boundary": "not_a_controlled_causal_complexity_experiment",
+  "scenarios": [
+    {"matrix_id":"H1","scenario_id":"holdout-101","domain":"aviation_operations","complexity":{"agent_hops":0,"semantic_distance":"literal","information_transformation":"copy","boundary":"shared"},"decision_count":2,"artifact":"scenarios/holdout-101.json","sha256":"a95844eb02897f531ba696ad8bb56bc7901501faf11229787fde78befc33ecd5"},
+    {"matrix_id":"H2","scenario_id":"holdout-102","domain":"insurance_underwriting","complexity":{"agent_hops":1,"semantic_distance":"paraphrase","information_transformation":"summary","boundary":"department"},"decision_count":4,"artifact":"scenarios/holdout-102.json","sha256":"631bba1208ea5e8c7cd16ffe3ed40ebb0366ba78a04dbb281b5662e5afc7a9be"},
+    {"matrix_id":"H3","scenario_id":"holdout-103","domain":"cloud_operations","complexity":{"agent_hops":2,"semantic_distance":"semantic_transformation","information_transformation":"compression","boundary":"partial_visibility"},"decision_count":3,"artifact":"scenarios/holdout-103.json","sha256":"3ada3a4324b4174d6c9f64c16b1314b023164868d6909b91db6114a9af082703"},
+    {"matrix_id":"H4","scenario_id":"holdout-104","domain":"food_safety_distribution","complexity":{"agent_hops":4,"semantic_distance":"conceptual_consequence","information_transformation":"inference","boundary":"different_authority"},"decision_count":5,"artifact":"scenarios/holdout-104.json","sha256":"8ef14d3cf8e5e6c37ec849275ef3db27b679eff77c9c8c6a6d8487015c285851"},
+    {"matrix_id":"H5","scenario_id":"holdout-105","domain":"industrial_maintenance","complexity":{"agent_hops":1,"semantic_distance":"conceptual_consequence","information_transformation":"inference","boundary":"partial_visibility"},"decision_count":3,"artifact":"scenarios/holdout-105.json","sha256":"d7ab7b70333173937c62e1572bd495ffaefd5dac6430e1edcc6a370055d66154"},
+    {"matrix_id":"H6","scenario_id":"holdout-106","domain":"payments_fraud","complexity":{"agent_hops":2,"semantic_distance":"paraphrase","information_transformation":"summary","boundary":"different_authority"},"decision_count":4,"artifact":"scenarios/holdout-106.json","sha256":"52bbbdFA2b0e75be3398c8b1b2a4b2c3728b478d69e3eed165e598e0e637eca1"},
+    {"matrix_id":"H7","scenario_id":"holdout-107","domain":"regulatory_compliance","complexity":{"agent_hops":4,"semantic_distance":"semantic_transformation","information_transformation":"compression","boundary":"department"},"decision_count":5,"artifact":"scenarios/holdout-107.json","sha256":"951d58c798d5029942e6e4cd3e068d57dafe9fb38e2cc46960731b29308932ee"},
+    {"matrix_id":"H8","scenario_id":"holdout-108","domain":"model_data_governance","complexity":{"agent_hops":0,"semantic_distance":"semantic_transformation","information_transformation":"copy","boundary":"shared"},"decision_count":2,"artifact":"scenarios/holdout-108.json","sha256":"695a98d2997285f33f879ce4b3b9c606263ba8e8710ba4ad4db55dfb41e3299f"}
+  ]
+}
