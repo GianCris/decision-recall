@@ -17,6 +17,7 @@ dr-bench = "dr_bench.cli:main"
 dr-baseline-sanity = "dr_baselines.sanity:main"
 dr-baseline-structured-sanity = "dr_baselines.structured_sanity:main"
 dr-baseline-pilot = "dr_baselines.pilot:main"
+dr-baseline-dev = "dr_baselines.dev_experiment:main"
 
 [tool.setuptools.packages.find]
 include = ["dr_bench*", "dr_baselines*"]

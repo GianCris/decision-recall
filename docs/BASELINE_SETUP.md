@@ -66,3 +66,24 @@ The directory must not already exist. It receives append-only `runs.jsonl` and
 `evaluations.jsonl` files plus a deterministic `summary.json`. Invalid responses
 and isolated provider errors are retained and never retried. Authentication or
 other systemic client-configuration failures abort the remaining matrix.
+
+## Frozen DEV baseline experiment
+
+After the runner implementation is committed and approved, prepare a new output
+directory without making provider calls:
+
+```powershell
+python -m dr_baselines.dev_experiment --output-dir dev-baseline-output --prepare
+```
+
+Audit the frozen `execution_plan.json` and `experiment_manifest.json`, then use
+the same directory for the explicit 72-call execution:
+
+```powershell
+python -m dr_baselines.dev_experiment --output-dir dev-baseline-output --execute
+```
+
+Execution refuses changed plan bytes, changed manifest design fields, a changed
+Git commit, tracked source modifications, existing run artifacts, non-DEV IDs,
+or any output path containing a sealed-holdout component. Untracked historical
+output directories do not affect the tracked-source cleanliness check.
