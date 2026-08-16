@@ -163,6 +163,10 @@ def run_fixed_pilot(output_dir: Path, adapter_factory: Callable[[], Any] = Gemin
     store = PilotStore(output_dir)
     config = pilot_config()
     scenarios = {scenario_id: load_scenario(scenario_id) for scenario_id in PILOT_SCENARIOS}
+    baseline_inputs = {
+        scenario_id: {key: value for key, value in scenario.items() if key != "private"}
+        for scenario_id, scenario in scenarios.items()
+    }
     records: list[RunRecord] = []
     evaluations: dict[tuple[str, str, str], Any] = {}
     systemic_failure: str | None = None
@@ -171,7 +175,7 @@ def run_fixed_pilot(output_dir: Path, adapter_factory: Callable[[], Any] = Gemin
         for attempt in schedule:
             started = perf_counter()
             try:
-                record = run_baseline(attempt.baseline_id, scenarios[attempt.scenario_id], adapter, config, repetition_id=attempt.repetition_id)
+                record = run_baseline(attempt.baseline_id, baseline_inputs[attempt.scenario_id], adapter, config, repetition_id=attempt.repetition_id)
             except Exception as exc:
                 record = _provider_error_record(attempt, adapter, config, exc, (perf_counter() - started) * 1000)
                 records.append(record); store.append_run(record)

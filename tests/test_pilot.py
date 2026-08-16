@@ -129,6 +129,14 @@ class PilotTests(unittest.TestCase):
             run_fixed_pilot(self.new_output(), lambda: adapter)
         self.assertEqual(events, [item for _ in range(9) for item in ("response_complete", "oracle_evaluation")])
 
+    def test_baseline_runner_receives_no_private_partition(self):
+        from dr_baselines.runner import run_baseline as real_run
+        def guarded_run(baseline_id, scenario, adapter, config, repetition_id=None):
+            self.assertNotIn("private", scenario)
+            return real_run(baseline_id, scenario, adapter, config, repetition_id)
+        with patch("dr_baselines.pilot.run_baseline", side_effect=guarded_run):
+            run_fixed_pilot(self.new_output(), CountingAdapter)
+
     def test_summary_contains_macro_micro_deltas_and_breakdowns(self):
         summary = run_fixed_pilot(self.new_output(), CountingAdapter)
         for baseline in PILOT_BASELINES:
