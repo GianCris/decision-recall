@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from google.auth.exceptions import DefaultCredentialsError
-from google.genai import errors as genai_errors
+from google.genai import errors as genai_errors, types
 
 from dr_baselines import ExperimentConfig
 from dr_baselines.output import DISCOVERY_RESPONSE_JSON_SCHEMA
@@ -28,6 +28,22 @@ class GoogleAdapterTests(unittest.TestCase):
         self.assertEqual(kwargs["location"], LOCATION)
         self.assertEqual(kwargs["http_options"].api_version, API_VERSION)
         self.assertNotIn("api_key", kwargs)
+
+    def test_client_forwards_public_transport_options(self):
+        credentials = object()
+        options = types.HttpOptions(
+            api_version=API_VERSION,
+            timeout=120000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        )
+        with patch("dr_baselines.google_adapter.google.auth.default", return_value=(credentials, "adc-project")), patch(
+            "dr_baselines.google_adapter.genai.Client", return_value=Mock()
+        ) as client_type:
+            _ = GeminiVertexAdapter(http_options=options).client
+        passed = client_type.call_args.kwargs["http_options"]
+        self.assertIs(passed, options)
+        self.assertEqual(passed.timeout, 120000)
+        self.assertEqual(passed.retry_options.attempts, 1)
 
     def test_generate_is_one_non_streaming_call_without_generation_config(self):
         usage = SimpleNamespace(prompt_token_count=123, candidates_token_count=45)

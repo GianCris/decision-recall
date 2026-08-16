@@ -28,8 +28,14 @@ class GeminiVertexAdapter:
 
     identifier = "google-genai-vertex-gemini-3.7-flash-v0.1"
 
-    def __init__(self, client: Any | None = None):
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        http_options: types.HttpOptions | None = None,
+    ):
         self._client = client
+        self._http_options = http_options
 
     def _create_client(self) -> Any:
         try:
@@ -44,7 +50,7 @@ class GeminiVertexAdapter:
             credentials=credentials,
             project=PROJECT_ID,
             location=LOCATION,
-            http_options=types.HttpOptions(api_version=API_VERSION),
+            http_options=self._http_options or types.HttpOptions(api_version=API_VERSION),
         )
 
     @property

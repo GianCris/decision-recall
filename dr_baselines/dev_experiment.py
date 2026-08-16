@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from google.genai import errors as genai_errors
+from google.genai import types
 
 from dr_bench import evaluate_discovery, load_scenario
 
@@ -35,7 +36,7 @@ from .output import (
 from .records import RunRecord
 from .runner import run_baseline, with_structured_output_metadata
 
-EXPERIMENT_VERSION = "dev-baselines-v0.1"
+EXPERIMENT_VERSION = "dev-baselines-v0.2"
 SDK_PACKAGE = "google-genai"
 SDK_VERSION = "2.14.0"
 DEV_SCENARIOS = tuple(f"dev-{number:03d}" for number in range(1, 13))
@@ -49,6 +50,10 @@ SCHEMA_SHA256 = hashlib.sha256(
 ORDER_RULE = "odd:1=B0_then_B1,2=B1_then_B0,3=B0_then_B1;even:1=B1_then_B0,2=B0_then_B1,3=B1_then_B0"
 PLAN_FILENAME = "execution_plan.json"
 MANIFEST_FILENAME = "experiment_manifest.json"
+ATTEMPT_LIFECYCLE_FILENAME = "attempt_lifecycle.jsonl"
+TRANSPORT_TIMEOUT_MS = 120_000
+TRANSPORT_TIMEOUT_SECONDS = 120
+TRANSPORT_ATTEMPTS = 1
 
 
 class DevExperimentError(RuntimeError):
@@ -179,6 +184,13 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
             )
         },
         "retry_policy": {"automatic_retries": False, "max_attempts_per_plan_entry": 1},
+        "transport": {
+            "timeout_ms": TRANSPORT_TIMEOUT_MS,
+            "timeout_seconds": TRANSPORT_TIMEOUT_SECONDS,
+            "attempts": TRANSPORT_ATTEMPTS,
+            "configuration_api": "google.genai.types.HttpOptions",
+            "retry_configuration_api": "google.genai.types.HttpRetryOptions",
+        },
         "failure_policy": {
             "invalid_response": "persist_and_continue_no_retry",
             "isolated_provider_error": "persist_and_continue_no_retry",
@@ -227,7 +239,7 @@ def _load_and_validate_prepared(output_dir: Path) -> tuple[list[dict[str, Any]],
     _validate_output_path(output_dir)
     if not output_dir.is_dir():
         raise DevExperimentError("prepared output directory does not exist")
-    for forbidden in ("runs.jsonl", "evaluations.jsonl", "summary.json"):
+    for forbidden in (ATTEMPT_LIFECYCLE_FILENAME, "runs.jsonl", "evaluations.jsonl", "summary.json"):
         if (output_dir / forbidden).exists():
             raise DevExperimentError("prepared directory already contains execution artifacts")
     plan_bytes = (output_dir / PLAN_FILENAME).read_bytes()
@@ -259,6 +271,18 @@ def _experiment_config() -> ExperimentConfig:
         ),
         True,
     )
+
+
+def _dev_http_options() -> types.HttpOptions:
+    return types.HttpOptions(
+        api_version="v1",
+        timeout=TRANSPORT_TIMEOUT_MS,
+        retry_options=types.HttpRetryOptions(attempts=TRANSPORT_ATTEMPTS),
+    )
+
+
+def _dev_adapter_factory() -> GeminiVertexAdapter:
+    return GeminiVertexAdapter(http_options=_dev_http_options())
 
 
 def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
@@ -304,6 +328,11 @@ def _run_metadata(entry: dict[str, Any], manifest: dict[str, Any], started: str,
         "location": LOCATION,
         "requested_model_id": MODEL_ID,
         "generation": _generation_metadata(),
+        "transport": {
+            "timeout_ms": TRANSPORT_TIMEOUT_MS,
+            "timeout_seconds": TRANSPORT_TIMEOUT_SECONDS,
+            "attempts": TRANSPORT_ATTEMPTS,
+        },
     }
 
 
@@ -441,6 +470,9 @@ def build_summary(
     evaluated: list[tuple[dict[str, Any], dict[str, Any]]],
     scenarios: dict[str, dict[str, Any]],
     abort_reason: str | None,
+    provider_invocations_started: int | None = None,
+    provider_invocations_completed: int | None = None,
+    interrupted_position: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     completed = len(runs) == TOTAL_CALLS and abort_reason is None
     per_baseline: dict[str, Any] = {}
@@ -515,13 +547,21 @@ def build_summary(
         "aggregate_status": "COMPLETE" if completed else "PARTIAL / ABORTED",
         "official_result_eligible": completed,
         "planned_calls": len(plan),
-        "attempted_calls": len(runs),
-        "completed_provider_calls": sum(run["validation_status"] != "provider_error" for run in runs),
+        "attempted_calls": provider_invocations_started if provider_invocations_started is not None else len(runs),
+        "provider_invocations_started": provider_invocations_started if provider_invocations_started is not None else len(runs),
+        "completed_provider_calls": provider_invocations_completed if provider_invocations_completed is not None else sum(run["validation_status"] != "provider_error" for run in runs),
+        "persisted_run_records": len(runs),
+        "persisted_evaluations": len(evaluated),
         "valid_runs": sum(run["validation_status"] == "valid" for run in runs),
         "invalid_runs": sum(run["validation_status"] == "invalid" for run in runs),
         "provider_error_runs": sum(run["validation_status"] == "provider_error" for run in runs),
         "abort_reason": abort_reason,
-        "last_global_call_index_attempted": runs[-1]["global_call_index"] if runs else None,
+        "last_global_call_index_attempted": (
+            interrupted_position["global_call_index"]
+            if interrupted_position and interrupted_position["provider_invocation_started"]
+            else (runs[-1]["global_call_index"] if runs else None)
+        ),
+        "interrupted_position": interrupted_position,
         "per_baseline": per_baseline,
         "by_repetition": by_repetition,
         "per_scenario": per_scenario,
@@ -532,7 +572,7 @@ def build_summary(
 
 def execute_experiment(
     output_dir: Path,
-    adapter_factory: Callable[[], Any] = GeminiVertexAdapter,
+    adapter_factory: Callable[[], Any] = _dev_adapter_factory,
 ) -> dict[str, Any]:
     plan, manifest, _ = _load_and_validate_prepared(output_dir)
     config = _experiment_config()
@@ -544,48 +584,116 @@ def execute_experiment(
     runs: list[dict[str, Any]] = []
     evaluated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     abort_reason: str | None = None
+    provider_invocations_started = 0
+    provider_invocations_completed = 0
+    interrupted_position: dict[str, Any] | None = None
+    lifecycle_path = output_dir / ATTEMPT_LIFECYCLE_FILENAME
     adapter = adapter_factory()
     try:
         for entry in plan:
             started_at = _utc_now()
             started = perf_counter()
+            lifecycle_stage = "planned"
             try:
-                record = run_baseline(
-                    entry["baseline_id"],
-                    public_scenarios[entry["scenario_id"]],
-                    adapter,
-                    config,
-                    repetition_id=entry["repetition_id"],
-                    structured_output=True,
-                )
-            except Exception as error:
-                record = _provider_error_record(entry, adapter, error, (perf_counter() - started) * 1000)
-                systemic = _is_systemic(error)
-            else:
-                systemic = False
-            completed_at = _utc_now()
-            run_value = {**asdict(record), **_run_metadata(entry, manifest, started_at, completed_at)}
-            runs.append(run_value)
-            _append_jsonl(output_dir / "runs.jsonl", run_value)
-            if record.validation_status == "valid" and record.parsed_candidate_response is not None:
-                evaluation = evaluate_discovery(scenarios[entry["scenario_id"]], record.parsed_candidate_response)
-                evaluation_value = asdict(evaluation)
-                evaluated.append((entry, evaluation_value))
-                _append_jsonl(output_dir / "evaluations.jsonl", {
-                    "global_call_index": entry["global_call_index"],
-                    "pair_id": entry["pair_id"],
-                    "scenario_id": entry["scenario_id"],
-                    "baseline_id": entry["baseline_id"],
-                    "repetition_id": entry["repetition_id"],
-                    "evaluation": evaluation_value,
+                _append_jsonl(lifecycle_path, {
+                    **entry,
+                    "event": "provider_invocation_started",
+                    "timestamp_utc": started_at,
                 })
-            if systemic:
-                abort_reason = record.provider_error
+                provider_invocations_started += 1
+                lifecycle_stage = "provider_invocation_in_flight"
+                try:
+                    record = run_baseline(
+                        entry["baseline_id"],
+                        public_scenarios[entry["scenario_id"]],
+                        adapter,
+                        config,
+                        repetition_id=entry["repetition_id"],
+                        structured_output=True,
+                    )
+                except KeyboardInterrupt:
+                    raise
+                except Exception as error:
+                    record = _provider_error_record(entry, adapter, error, (perf_counter() - started) * 1000)
+                    systemic = _is_systemic(error)
+                    _append_jsonl(lifecycle_path, {
+                        **entry,
+                        "event": "provider_invocation_failed",
+                        "timestamp_utc": _utc_now(),
+                        "error_type": type(error).__name__,
+                    })
+                else:
+                    systemic = False
+                    provider_invocations_completed += 1
+                    lifecycle_stage = "provider_invocation_completed"
+                    _append_jsonl(lifecycle_path, {
+                        **entry,
+                        "event": "provider_invocation_completed",
+                        "timestamp_utc": _utc_now(),
+                    })
+                completed_at = _utc_now()
+                run_value = {**asdict(record), **_run_metadata(entry, manifest, started_at, completed_at)}
+                _append_jsonl(output_dir / "runs.jsonl", run_value)
+                runs.append(run_value)
+                lifecycle_stage = "run_record_persisted"
+                _append_jsonl(lifecycle_path, {
+                    **entry,
+                    "event": "run_record_persisted",
+                    "timestamp_utc": _utc_now(),
+                })
+                if record.validation_status == "valid" and record.parsed_candidate_response is not None:
+                    evaluation = evaluate_discovery(scenarios[entry["scenario_id"]], record.parsed_candidate_response)
+                    evaluation_value = asdict(evaluation)
+                    _append_jsonl(output_dir / "evaluations.jsonl", {
+                        "global_call_index": entry["global_call_index"],
+                        "pair_id": entry["pair_id"],
+                        "scenario_id": entry["scenario_id"],
+                        "baseline_id": entry["baseline_id"],
+                        "repetition_id": entry["repetition_id"],
+                        "evaluation": evaluation_value,
+                    })
+                    evaluated.append((entry, evaluation_value))
+                    lifecycle_stage = "evaluation_persisted"
+                    _append_jsonl(lifecycle_path, {
+                        **entry,
+                        "event": "evaluation_persisted",
+                        "timestamp_utc": _utc_now(),
+                    })
+                if systemic:
+                    abort_reason = record.provider_error
+                    break
+            except KeyboardInterrupt:
+                abort_reason = "operator_interrupt"
+                interrupted_position = {
+                    "global_call_index": entry["global_call_index"],
+                    "scenario_id": entry["scenario_id"],
+                    "repetition_id": entry["repetition_id"],
+                    "baseline_id": entry["baseline_id"],
+                    "condition": entry["condition"],
+                    "pair_id": entry["pair_id"],
+                    "pair_order": entry["pair_order"],
+                    "order_within_pair": entry["order_within_pair"],
+                    "timestamp_utc": _utc_now(),
+                    "interruption_type": "KeyboardInterrupt",
+                    "abort_reason": "operator_interrupt",
+                    "lifecycle_stage": lifecycle_stage,
+                    "provider_invocation_started": lifecycle_stage != "planned",
+                }
+                _append_jsonl(lifecycle_path, {**interrupted_position, "event": "experiment_interrupted"})
                 break
     finally:
         if hasattr(adapter, "close"):
             adapter.close()
-    summary = build_summary(plan, runs, evaluated, scenarios, abort_reason)
+    summary = build_summary(
+        plan,
+        runs,
+        evaluated,
+        scenarios,
+        abort_reason,
+        provider_invocations_started,
+        provider_invocations_completed,
+        interrupted_position,
+    )
     (output_dir / "summary.json").write_bytes(_canonical_json(summary))
     return summary
 

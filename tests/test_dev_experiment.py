@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from google.genai import _api_client, types
+
 from dr_baselines.baselines import BASE_TASK_PROMPT
 from dr_baselines.dev_experiment import (
     DEV_BASELINES,
@@ -15,8 +17,13 @@ from dr_baselines.dev_experiment import (
     PLAN_FILENAME,
     PROMPT_SHA256,
     SCHEMA_SHA256,
+    TRANSPORT_ATTEMPTS,
+    TRANSPORT_TIMEOUT_MS,
+    TRANSPORT_TIMEOUT_SECONDS,
     DevExperimentError,
     build_execution_plan,
+    _dev_adapter_factory,
+    _dev_http_options,
     execute_experiment,
     main,
     prepare_experiment,
@@ -100,6 +107,8 @@ class DevExperimentTests(unittest.TestCase):
         for item in plan:
             counts[(item["scenario_id"], item["baseline_id"], item["repetition_id"])] += 1
         self.assertTrue(all(value == 1 for value in counts.values()))
+        plan_bytes = (json.dumps(plan, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        self.assertEqual(hashlib.sha256(plan_bytes).hexdigest(), "b04496c00c3e5bc991e41b591254b73d222d430edfc30159b3deb0a4de2e40b7")
 
     def test_odd_even_order_rule_is_exact(self):
         plan = build_execution_plan()
@@ -232,9 +241,10 @@ class DevExperimentTests(unittest.TestCase):
             "parsed_candidate_response", "validation_status", "validation_error", "provider_error",
         }
         self.assertTrue(required <= runs[0].keys())
-        self.assertEqual(runs[0]["experiment_config_version"], "dev-baselines-v0.1")
+        self.assertEqual(runs[0]["experiment_config_version"], "dev-baselines-v0.2")
         self.assertTrue(runs[0]["generation"]["native_structured_output"])
         self.assertEqual(runs[0]["response_schema_sha256"], SCHEMA_SHA256)
+        self.assertEqual(runs[0]["transport"], {"timeout_ms": 120000, "timeout_seconds": 120, "attempts": 1})
 
     def test_invalid_and_isolated_errors_persist_without_retry(self):
         invalid_output = self.prepared()
@@ -263,6 +273,77 @@ class DevExperimentTests(unittest.TestCase):
         self.assertFalse(summary["official_result_eligible"])
         self.assertEqual(summary["attempted_calls"], 1)
 
+    def test_keyboard_interrupt_on_first_invocation_writes_truthful_abort(self):
+        output = self.prepared()
+        adapter = ScenarioAwareAdapter(failures={1: KeyboardInterrupt()})
+        with self.frozen_git():
+            summary = execute_experiment(output, lambda: adapter)
+        self.assertEqual(len(adapter.calls), 1)
+        self.assertEqual(summary["experiment_status"], "aborted")
+        self.assertEqual(summary["aggregate_status"], "PARTIAL / ABORTED")
+        self.assertFalse(summary["official_result_eligible"])
+        self.assertEqual(summary["abort_reason"], "operator_interrupt")
+        self.assertEqual(summary["provider_invocations_started"], 1)
+        self.assertEqual(summary["completed_provider_calls"], 0)
+        self.assertEqual(summary["persisted_run_records"], 0)
+        self.assertEqual(summary["persisted_evaluations"], 0)
+        self.assertEqual(summary["last_global_call_index_attempted"], 1)
+        self.assertFalse((output / "runs.jsonl").exists())
+        interruption = summary["interrupted_position"]
+        self.assertEqual(interruption["global_call_index"], 1)
+        self.assertEqual(interruption["interruption_type"], "KeyboardInterrupt")
+        self.assertEqual(interruption["abort_reason"], "operator_interrupt")
+        self.assertEqual(interruption["lifecycle_stage"], "provider_invocation_in_flight")
+        self.assertTrue(interruption["provider_invocation_started"])
+        self.assertTrue((output / "summary.json").is_file())
+
+    def test_keyboard_interrupt_preserves_durable_prefix_and_cannot_resume(self):
+        output = self.prepared()
+        adapter = ScenarioAwareAdapter(failures={4: KeyboardInterrupt()})
+        with self.frozen_git():
+            summary = execute_experiment(output, lambda: adapter)
+        self.assertEqual(len(adapter.calls), 4)
+        self.assertEqual(summary["provider_invocations_started"], 4)
+        self.assertEqual(summary["completed_provider_calls"], 3)
+        self.assertEqual(summary["persisted_run_records"], 3)
+        self.assertEqual(summary["persisted_evaluations"], 3)
+        self.assertEqual(len((output / "runs.jsonl").read_text(encoding="utf-8").splitlines()), 3)
+        self.assertEqual(len((output / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()), 3)
+        self.assertEqual(summary["interrupted_position"]["global_call_index"], 4)
+        replacement = Mock()
+        with self.frozen_git(), self.assertRaises(DevExperimentError):
+            execute_experiment(output, replacement)
+        replacement.assert_not_called()
+
+    def test_public_transport_configuration_is_exact(self):
+        options = _dev_http_options()
+        self.assertIsInstance(options, types.HttpOptions)
+        self.assertEqual(options.api_version, "v1")
+        self.assertEqual(options.timeout, TRANSPORT_TIMEOUT_MS)
+        self.assertEqual(TRANSPORT_TIMEOUT_MS, TRANSPORT_TIMEOUT_SECONDS * 1000)
+        self.assertEqual(options.retry_options.attempts, TRANSPORT_ATTEMPTS)
+        self.assertEqual(TRANSPORT_ATTEMPTS, 1)
+        self.assertEqual(_api_client.get_timeout_in_seconds(options.timeout), 120.0)
+        with patch("dr_baselines.dev_experiment.GeminiVertexAdapter") as adapter_type:
+            _dev_adapter_factory()
+        passed = adapter_type.call_args.kwargs["http_options"]
+        self.assertEqual(passed.timeout, 120000)
+        self.assertEqual(passed.retry_options.attempts, 1)
+
+    def test_pinned_sdk_none_retry_policy_is_one_attempt(self):
+        calls = 0
+        def fail():
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("stop")
+        retry = __import__("tenacity").Retrying(**_api_client.retry_args(None))
+        with self.assertRaises(RuntimeError):
+            retry(fail)
+        self.assertEqual(calls, 1)
+        description = types.HttpRetryOptions.model_fields["attempts"].description
+        self.assertIn("including the original request", description)
+        self.assertIn("0 or 1", description)
+
     def test_non_dev_ids_and_forbidden_paths_are_rejected(self):
         for forbidden_id in tuple(f"holdout-{number:03d}" for number in range(101, 109)) + ("dev-013", "unknown"):
             plan = build_execution_plan()
@@ -281,6 +362,10 @@ class DevExperimentTests(unittest.TestCase):
         self.assertEqual(manifest["response_schema_version"], DISCOVERY_RESPONSE_SCHEMA_VERSION)
         self.assertEqual(manifest["response_schema_sha256"], SCHEMA_SHA256)
         self.assertEqual(manifest["sdk_version"], "2.14.0")
+        self.assertEqual(manifest["experiment_version"], "dev-baselines-v0.2")
+        self.assertEqual(manifest["transport"]["timeout_ms"], 120000)
+        self.assertEqual(manifest["transport"]["timeout_seconds"], 120)
+        self.assertEqual(manifest["transport"]["attempts"], 1)
         self.assertEqual(manifest["baseline_allowlist"], ["B0", "B1"])
         self.assertNotIn("B2", json.dumps(json.loads((output / PLAN_FILENAME).read_text())))
 
