@@ -71,6 +71,7 @@ class PilotTests(unittest.TestCase):
         output = self.new_output()
         summary = run_fixed_pilot(output, lambda: adapter)
         self.assertEqual(adapter.calls, 9)
+        self.assertEqual(adapter.response_schemas, [None] * 9)
         self.assertTrue(adapter.closed)
         runs = [json.loads(line) for line in (output / "runs.jsonl").read_text().splitlines()]
         evaluations = [json.loads(line) for line in (output / "evaluations.jsonl").read_text().splitlines()]
@@ -81,6 +82,11 @@ class PilotTests(unittest.TestCase):
         expected = {(s, b, "1") for s in PILOT_SCENARIOS for b in PILOT_BASELINES}
         actual = {(x["scenario_id"], x["baseline_id"], x["repetition_id"]) for x in evaluations}
         self.assertEqual(actual, expected)
+        for item in runs:
+            metadata = dict(item["experiment_config"]["generation_config"])
+            self.assertIs(metadata["native_structured_output"], False)
+            self.assertIsNone(metadata["response_mime_type"])
+            self.assertIsNone(metadata["response_schema_version"])
 
     def test_invalid_outputs_are_recorded_without_retry_or_evaluation(self):
         adapter = CountingAdapter(["{}"] * 9)
@@ -109,7 +115,10 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(summary["status"], "aborted")
         self.assertEqual(summary["attempted_call_count"], 1)
-        self.assertEqual(len((output / "runs.jsonl").read_text().splitlines()), 1)
+        runs = [json.loads(line) for line in (output / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(len(runs), 1)
+        metadata = dict(runs[0]["experiment_config"]["generation_config"])
+        self.assertIs(metadata["native_structured_output"], False)
 
     def test_oracle_evaluation_occurs_only_after_response(self):
         adapter = CountingAdapter()

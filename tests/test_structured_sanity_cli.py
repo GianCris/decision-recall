@@ -39,7 +39,7 @@ class StructuredSanityCliTests(unittest.TestCase):
         adapter = adapter_type.return_value
         run.return_value = RunRecord(
             baseline_id="B0", scenario_id="dev-001", condition="implicit",
-            prompt_version="0.1", experiment_config_version="0.1", model_adapter="mock",
+            prompt_version="0.1", experiment_config_version="structured-sanity-0.1", model_adapter="mock",
             raw_model_response="{}", parsed_candidate_response={}, validation_status="valid",
             repetition_id="1",
         )
@@ -49,8 +49,10 @@ class StructuredSanityCliTests(unittest.TestCase):
         self.assertEqual(args[1]["id"], "dev-001")
         self.assertIs(args[2], adapter)
         self.assertEqual(args[3].model_name, MODEL_ID)
+        self.assertEqual(args[3].version, "structured-sanity-0.1")
         self.assertEqual(args[3].scenario_ids, ("dev-001",))
         self.assertEqual(kwargs["repetition_id"], "1")
+        self.assertIs(kwargs["structured_output"], True)
         self.assertTrue((output / "run.json").is_file())
         adapter.close.assert_called_once()
 

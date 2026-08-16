@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     config = ExperimentConfig(
-        version="0.1",
+        version="structured-sanity-0.1",
         model_name=MODEL_ID,
         repetitions=1,
         dataset_id="DR-Bench",
@@ -34,7 +34,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     adapter = GeminiVertexAdapter()
     try:
-        record = run_baseline("B0", load_scenario("dev-001"), adapter, config, repetition_id="1")
+        record = run_baseline(
+            "B0",
+            load_scenario("dev-001"),
+            adapter,
+            config,
+            repetition_id="1",
+            structured_output=True,
+        )
     except GeminiAuthenticationError as exc:
         print(f"Authentication failed: {exc}", file=sys.stderr)
         return 3

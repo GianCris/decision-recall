@@ -43,20 +43,30 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(record.condition, condition)
             self.assertIn(f'"discovery_condition":"{condition}"', adapter.prompts[0])
 
-    def test_b0_and_b1_share_schema_while_b2_remains_unstructured(self):
+    def test_default_execution_is_unstructured_for_every_baseline(self):
         schemas = {}
         for baseline_id in ("B0", "B1", "B2"):
             adapter = DeterministicMockAdapter(response_for(self.scenario))
             run_baseline(baseline_id, self.scenario, adapter, self.config)
             schemas[baseline_id] = adapter.response_schemas[0]
-        self.assertIs(schemas["B0"], DISCOVERY_RESPONSE_JSON_SCHEMA)
-        self.assertIs(schemas["B1"], DISCOVERY_RESPONSE_JSON_SCHEMA)
-        self.assertIsNone(schemas["B2"])
+        self.assertEqual(schemas, {"B0": None, "B1": None, "B2": None})
+
+    def test_b0_and_b1_share_the_explicit_structured_schema(self):
+        for baseline_id in ("B0", "B1"):
+            adapter = DeterministicMockAdapter(response_for(self.scenario))
+            run_baseline(baseline_id, self.scenario, adapter, self.config, structured_output=True)
+            self.assertIs(adapter.response_schemas[0], DISCOVERY_RESPONSE_JSON_SCHEMA)
 
     def test_structured_request_contains_no_private_or_scenario_answers(self):
         for baseline_id in ("B0", "B1"):
             adapter = DeterministicMockAdapter(response_for(self.scenario))
-            run_baseline(baseline_id, PrivateGuard(self.scenario), adapter, self.config)
+            run_baseline(
+                baseline_id,
+                PrivateGuard(self.scenario),
+                adapter,
+                self.config,
+                structured_output=True,
+            )
             request_text = adapter.prompts[0] + json.dumps(adapter.response_schemas[0], sort_keys=True)
             for forbidden in (
                 "decision_labels", "expected_actions", "expected_final_world",
@@ -65,6 +75,18 @@ class RunnerTests(unittest.TestCase):
                 self.assertNotIn(forbidden, request_text)
             for decision in self.scenario["private"]["decision_labels"]:
                 self.assertNotIn(decision.get("rationale", "private rationale sentinel"), request_text)
+
+    def test_execution_mode_is_serialized_in_config_metadata(self):
+        for enabled in (False, True):
+            adapter = DeterministicMockAdapter(response_for(self.scenario))
+            record = run_baseline("B0", self.scenario, adapter, self.config, structured_output=enabled)
+            metadata = dict(record.experiment_config["generation_config"])
+            self.assertIs(metadata["native_structured_output"], enabled)
+            self.assertEqual(metadata["response_mime_type"], "application/json" if enabled else None)
+            self.assertEqual(
+                metadata["response_schema_version"],
+                "discovery-response-v0.1" if enabled else None,
+            )
 
     def test_invalid_output_is_recorded_not_evaluated(self):
         record = run_baseline("B0", self.scenario, DeterministicMockAdapter("{}"), self.config)

@@ -10,6 +10,8 @@ class OutputValidationError(ValueError):
 
 STRENGTHS = {"independent", "supporting", "material", "critical"}
 RESPONSE_KEYS = {"decision_id", "materially_dependent", "dependency_strength", "still_justified"}
+DISCOVERY_RESPONSE_MIME_TYPE = "application/json"
+DISCOVERY_RESPONSE_SCHEMA_VERSION = "discovery-response-v0.1"
 
 DISCOVERY_RESPONSE_JSON_SCHEMA = {
     "type": "object",

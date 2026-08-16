@@ -16,7 +16,7 @@ from .baselines import get_baseline
 from .config import ExperimentConfig
 from .google_adapter import MODEL_ID, GeminiAuthenticationError, GeminiVertexAdapter
 from .records import RunRecord
-from .runner import run_baseline
+from .runner import run_baseline, with_structured_output_metadata
 
 PILOT_SCENARIOS = ("dev-005", "dev-002", "dev-006")
 PILOT_BASELINES = ("B0", "B1", "B2")
@@ -45,10 +45,13 @@ def build_schedule(
 
 
 def pilot_config() -> ExperimentConfig:
-    return ExperimentConfig(
-        version="pilot-0.1", model_name=MODEL_ID, repetitions=1,
-        dataset_id="DR-Bench", dataset_version="0.1", scenario_ids=PILOT_SCENARIOS,
-        candidate_view_contract_version="0.1",
+    return with_structured_output_metadata(
+        ExperimentConfig(
+            version="pilot-0.1", model_name=MODEL_ID, repetitions=1,
+            dataset_id="DR-Bench", dataset_version="0.1", scenario_ids=PILOT_SCENARIOS,
+            candidate_view_contract_version="0.1",
+        ),
+        False,
     )
 
 

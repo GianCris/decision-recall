@@ -29,4 +29,5 @@ class SanityCliTests(unittest.TestCase):
         self.assertEqual(args[3].model_name, MODEL_ID)
         self.assertEqual(args[3].repetitions, 1)
         self.assertEqual(kwargs["repetition_id"], "1")
+        self.assertNotIn("structured_output", kwargs)
         adapter.close.assert_called_once()
