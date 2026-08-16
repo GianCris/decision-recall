@@ -6,6 +6,7 @@ from google.auth.exceptions import DefaultCredentialsError
 from google.genai import errors as genai_errors
 
 from dr_baselines import ExperimentConfig
+from dr_baselines.output import DISCOVERY_RESPONSE_JSON_SCHEMA
 from dr_baselines.google_adapter import (
     API_VERSION, LOCATION, MODEL_ID, PROJECT_ID,
     GeminiAuthenticationError, GeminiVertexAdapter,
@@ -40,6 +41,28 @@ class GoogleAdapterTests(unittest.TestCase):
         self.assertEqual(result.input_tokens, 123)
         self.assertEqual(result.output_tokens, 45)
         self.assertGreaterEqual(result.latency_ms, 0)
+
+    def test_structured_generate_uses_native_json_schema_only(self):
+        response = SimpleNamespace(text='{"decisions":[]}', model_version=None, usage_metadata=None)
+        client = Mock()
+        client.models.generate_content.return_value = response
+        GeminiVertexAdapter(client).generate(
+            "prompt",
+            ExperimentConfig(model_name=MODEL_ID),
+            response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA,
+        )
+        request = client.models.generate_content.call_args.kwargs
+        self.assertEqual(request["model"], MODEL_ID)
+        self.assertEqual(request["contents"], "prompt")
+        provider_config = request["config"]
+        self.assertEqual(provider_config.response_mime_type, "application/json")
+        self.assertEqual(provider_config.response_json_schema, DISCOVERY_RESPONSE_JSON_SCHEMA)
+        for field in (
+            "temperature", "top_p", "top_k", "thinking_config", "seed",
+            "presence_penalty", "frequency_penalty", "stop_sequences", "tools",
+            "max_output_tokens",
+        ):
+            self.assertIsNone(getattr(provider_config, field))
 
     def test_missing_adc_fails_closed(self):
         with patch("dr_baselines.google_adapter.google.auth.default", side_effect=DefaultCredentialsError("missing")), patch("dr_baselines.google_adapter.genai.Client") as client_type:

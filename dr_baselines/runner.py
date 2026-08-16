@@ -7,7 +7,7 @@ from dr_bench import candidate_view
 from .baselines import get_baseline
 from .config import ExperimentConfig
 from .models import ModelAdapter
-from .output import OutputValidationError, parse_discovery_response
+from .output import DISCOVERY_RESPONSE_JSON_SCHEMA, OutputValidationError, parse_discovery_response
 from .records import RunRecord
 
 
@@ -22,7 +22,10 @@ def run_baseline(
     baseline = get_baseline(baseline_id)
     visible = candidate_view(scenario, phase="discovery", condition=baseline.condition)
     prompt = baseline.build_prompt(visible)
-    response = adapter.generate(prompt, config)
+    if baseline.baseline_id in {"B0", "B1"}:
+        response = adapter.generate(prompt, config, response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA)
+    else:
+        response = adapter.generate(prompt, config)
     decision_ids = [item["id"] for item in visible["decisions"]]
     try:
         parsed = parse_discovery_response(response.text, decision_ids)

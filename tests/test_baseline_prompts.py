@@ -1,4 +1,5 @@
 import json
+import hashlib
 import unittest
 
 from dr_bench import candidate_view, load_scenario
@@ -18,9 +19,17 @@ class PromptTests(unittest.TestCase):
         self.assertIs(B0.task_instruction, BASE_TASK_PROMPT)
         self.assertIs(B1.task_instruction, BASE_TASK_PROMPT)
         self.assertEqual(B0.task_instruction, B1.task_instruction)
+        self.assertEqual(
+            hashlib.sha256(BASE_TASK_PROMPT.encode("utf-8")).hexdigest(),
+            "2ed1e0280d3108aa9f7458bc7a21d4cf9f82ad2e6c4795d2ac516fffdb5557b1",
+        )
 
     def test_b2_is_base_prompt_plus_only_isolated_block(self):
         self.assertEqual(B2.task_instruction, BASE_TASK_PROMPT + "\n\n" + REEVALUATION_INSTRUCTION)
+        self.assertEqual(
+            hashlib.sha256(REEVALUATION_INSTRUCTION.encode("utf-8")).hexdigest(),
+            "92983251bc6c7fcd7557eb36947d2ade4d539a6e7a054df065e88d32120630d8",
+        )
 
     def test_prompt_rejects_wrong_condition(self):
         structured = candidate_view(self.scenario, "discovery", "structured")

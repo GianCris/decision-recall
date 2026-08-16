@@ -53,12 +53,27 @@ class GeminiVertexAdapter:
             self._client = self._create_client()
         return self._client
 
-    def generate(self, prompt: str, config: ExperimentConfig) -> ModelResponse:
+    def generate(
+        self,
+        prompt: str,
+        config: ExperimentConfig,
+        response_schema: dict[str, Any] | None = None,
+    ) -> ModelResponse:
         if config.model_name not in {None, MODEL_ID}:
             raise ValueError(f"adapter requires model_name={MODEL_ID!r}")
         started = perf_counter()
         try:
-            response = self.client.models.generate_content(model=MODEL_ID, contents=prompt)
+            provider_config = None
+            if response_schema is not None:
+                provider_config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_json_schema=response_schema,
+                )
+            response = self.client.models.generate_content(
+                model=MODEL_ID,
+                contents=prompt,
+                **({"config": provider_config} if provider_config is not None else {}),
+            )
         except GoogleAuthError as exc:
             raise GeminiAuthenticationError("Application Default Credentials failed during the provider request.") from exc
         except genai_errors.ClientError as exc:

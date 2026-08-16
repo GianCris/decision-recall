@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from .config import ExperimentConfig
 
@@ -20,7 +20,12 @@ class ModelAdapter(Protocol):
     @property
     def identifier(self) -> str: ...
 
-    def generate(self, prompt: str, config: ExperimentConfig) -> ModelResponse: ...
+    def generate(
+        self,
+        prompt: str,
+        config: ExperimentConfig,
+        response_schema: dict[str, Any] | None = None,
+    ) -> ModelResponse: ...
 
 
 class DeterministicMockAdapter:
@@ -31,7 +36,14 @@ class DeterministicMockAdapter:
     def __init__(self, response_text: str):
         self.response_text = response_text
         self.prompts: list[str] = []
+        self.response_schemas: list[dict[str, Any] | None] = []
 
-    def generate(self, prompt: str, config: ExperimentConfig) -> ModelResponse:
+    def generate(
+        self,
+        prompt: str,
+        config: ExperimentConfig,
+        response_schema: dict[str, Any] | None = None,
+    ) -> ModelResponse:
         self.prompts.append(prompt)
+        self.response_schemas.append(response_schema)
         return ModelResponse(text=self.response_text)

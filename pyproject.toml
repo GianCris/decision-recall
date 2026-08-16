@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 dr-bench = "dr_bench.cli:main"
 dr-baseline-sanity = "dr_baselines.sanity:main"
+dr-baseline-structured-sanity = "dr_baselines.structured_sanity:main"
 dr-baseline-pilot = "dr_baselines.pilot:main"
 
 [tool.setuptools.packages.find]

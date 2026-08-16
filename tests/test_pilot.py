@@ -25,14 +25,14 @@ class CountingAdapter(DeterministicMockAdapter):
         self.calls = 0
         self.closed = False
 
-    def generate(self, prompt, config):
+    def generate(self, prompt, config, response_schema=None):
         self.calls += 1
         if self.responses:
             item = self.responses.pop(0)
             if isinstance(item, Exception):
                 raise item
             self.response_text = item
-        return super().generate(prompt, config)
+        return super().generate(prompt, config, response_schema=response_schema)
 
     def close(self):
         self.closed = True
@@ -115,8 +115,8 @@ class PilotTests(unittest.TestCase):
         adapter = CountingAdapter()
         events = []
         original_generate = adapter.generate
-        def generate(prompt, config):
-            result = original_generate(prompt, config)
+        def generate(prompt, config, response_schema=None):
+            result = original_generate(prompt, config, response_schema=response_schema)
             events.append("response_complete")
             return result
         adapter.generate = generate

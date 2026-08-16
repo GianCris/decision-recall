@@ -39,6 +39,19 @@ python -m dr_baselines.sanity --execute
 Running the module without `--execute` refuses to call the provider. Imports and
 tests never construct a provider client or make a network request.
 
+## Explicit structured-output sanity call
+
+The separate command below makes exactly one B0, `dev-001`, repetition `1`
+call using the unchanged B0 prompt and Gemini native JSON structured output:
+
+```powershell
+python -m dr_baselines.structured_sanity --output-dir structured-sanity-output --execute
+```
+
+The output directory must not already exist. The command writes one `run.json`
+RunRecord and refuses to construct the provider adapter without `--execute`.
+This technical check is not an experimental run or result.
+
 ## Fixed baseline pilot
 
 The pilot command is fixed to `dev-005`, `dev-002`, and `dev-006`; B0, B1, and

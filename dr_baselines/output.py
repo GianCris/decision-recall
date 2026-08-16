@@ -11,6 +11,36 @@ class OutputValidationError(ValueError):
 STRENGTHS = {"independent", "supporting", "material", "critical"}
 RESPONSE_KEYS = {"decision_id", "materially_dependent", "dependency_strength", "still_justified"}
 
+DISCOVERY_RESPONSE_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["decisions"],
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "decision_id",
+                    "materially_dependent",
+                    "dependency_strength",
+                    "still_justified",
+                ],
+                "properties": {
+                    "decision_id": {"type": "string"},
+                    "materially_dependent": {"type": "boolean"},
+                    "dependency_strength": {
+                        "type": "string",
+                        "enum": ["independent", "supporting", "material", "critical"],
+                    },
+                    "still_justified": {"type": "boolean"},
+                },
+            },
+        }
+    },
+}
+
 
 def parse_discovery_response(raw: str, expected_decision_ids: list[str]) -> dict[str, Any]:
     try:

@@ -2,7 +2,13 @@ import json
 import unittest
 
 from dr_bench import load_scenario
-from dr_baselines import DeterministicMockAdapter, ExperimentConfig, RetryPolicy, run_baseline
+from dr_baselines import (
+    DISCOVERY_RESPONSE_JSON_SCHEMA,
+    DeterministicMockAdapter,
+    ExperimentConfig,
+    RetryPolicy,
+    run_baseline,
+)
 
 
 def response_for(scenario):
@@ -36,6 +42,29 @@ class RunnerTests(unittest.TestCase):
             record = run_baseline(baseline_id, self.scenario, adapter, self.config)
             self.assertEqual(record.condition, condition)
             self.assertIn(f'"discovery_condition":"{condition}"', adapter.prompts[0])
+
+    def test_b0_and_b1_share_schema_while_b2_remains_unstructured(self):
+        schemas = {}
+        for baseline_id in ("B0", "B1", "B2"):
+            adapter = DeterministicMockAdapter(response_for(self.scenario))
+            run_baseline(baseline_id, self.scenario, adapter, self.config)
+            schemas[baseline_id] = adapter.response_schemas[0]
+        self.assertIs(schemas["B0"], DISCOVERY_RESPONSE_JSON_SCHEMA)
+        self.assertIs(schemas["B1"], DISCOVERY_RESPONSE_JSON_SCHEMA)
+        self.assertIsNone(schemas["B2"])
+
+    def test_structured_request_contains_no_private_or_scenario_answers(self):
+        for baseline_id in ("B0", "B1"):
+            adapter = DeterministicMockAdapter(response_for(self.scenario))
+            run_baseline(baseline_id, PrivateGuard(self.scenario), adapter, self.config)
+            request_text = adapter.prompts[0] + json.dumps(adapter.response_schemas[0], sort_keys=True)
+            for forbidden in (
+                "decision_labels", "expected_actions", "expected_final_world",
+                "must_recover", "must_not_touch", "dependency_path",
+            ):
+                self.assertNotIn(forbidden, request_text)
+            for decision in self.scenario["private"]["decision_labels"]:
+                self.assertNotIn(decision.get("rationale", "private rationale sentinel"), request_text)
 
     def test_invalid_output_is_recorded_not_evaluated(self):
         record = run_baseline("B0", self.scenario, DeterministicMockAdapter("{}"), self.config)
