@@ -2,6 +2,7 @@ import hashlib
 import importlib
 import json
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -492,6 +493,13 @@ class DevExperimentTests(unittest.TestCase):
         import httpx
         self.assertEqual(_retryable_delivery_failure(httpx.ReadTimeout("timeout"))[:2], (True, "timeout"))
         self.assertEqual(_retryable_delivery_failure(RuntimeError("other"))[:2], (False, "non_retryable_exception"))
+
+    def test_direct_httpx_dependency_is_pinned_and_requests_is_not_imported(self):
+        project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+        self.assertIn("httpx==0.28.1", project["dependencies"])
+        source = Path("dr_baselines/dev_experiment.py").read_text(encoding="utf-8")
+        self.assertNotIn("import requests", source)
+        self.assertNotIn("requests.Timeout", source)
 
     def test_first_response_wins_on_attempts_two_three_and_four(self):
         for successful_attempt in (2, 3, 4):

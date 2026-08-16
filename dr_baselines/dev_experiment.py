@@ -15,7 +15,6 @@ from time import perf_counter, sleep
 from typing import Any, Callable
 
 import httpx
-import requests
 from google.genai import errors as genai_errors, types
 
 from dr_bench import evaluate_discovery, load_scenario
@@ -193,7 +192,7 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
             "sdk_attempts": TRANSPORT_ATTEMPTS,
             "harness_max_delivery_attempts_per_scientific_slot": MAX_DELIVERY_ATTEMPTS,
             "retryable_http_status_codes": list(RETRYABLE_HTTP_STATUS_CODES),
-            "retryable_timeout_exceptions": ["TimeoutError", "httpx.TimeoutException", "requests.Timeout"],
+            "retryable_timeout_exceptions": ["TimeoutError", "httpx.TimeoutException"],
             "backoff_seconds": list(DELIVERY_BACKOFF_SECONDS),
             "jitter": False,
             "delivery_policy_version": DELIVERY_POLICY_VERSION,
@@ -412,7 +411,7 @@ def _retryable_delivery_failure(error: Exception) -> tuple[bool, str, int | None
     status = _provider_status_code(error)
     if isinstance(error, genai_errors.APIError):
         return status in RETRYABLE_HTTP_STATUS_CODES, "http_status", status
-    if isinstance(error, (TimeoutError, httpx.TimeoutException, requests.Timeout)):
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
         return True, "timeout", status
     return False, "non_retryable_exception", status
 
