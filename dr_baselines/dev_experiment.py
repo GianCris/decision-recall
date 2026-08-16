@@ -416,6 +416,78 @@ def _retryable_delivery_failure(error: Exception) -> tuple[bool, str, int | None
     return False, "non_retryable_exception", status
 
 
+def run_delivery_attempts(
+    entry: dict[str, Any], lifecycle_path: Path, invoke: Callable[[], Any],
+    sleep_fn: Callable[[float], None], delivery_stats: dict[str, Any] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Run the audited v0.4 bounded pre-response delivery policy."""
+    last_error: Exception | None = None
+    last_classification: str | None = None
+    last_status: int | None = None
+    result: Any | None = None
+    attempt_number = 0
+    for attempt_number in range(1, MAX_DELIVERY_ATTEMPTS + 1):
+        if delivery_stats is not None:
+            delivery_stats["total_delivery_attempts"] += 1
+            delivery_stats["attempts_by_number"][str(attempt_number)] += 1
+        attempt_started = _utc_now()
+        _append_jsonl(lifecycle_path, {
+            **entry, "event": "delivery_attempt_started",
+            "delivery_attempt_number": attempt_number,
+            "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+            "started_at_utc": attempt_started,
+        })
+        if stage_callback:
+            stage_callback("provider_invocation_in_flight")
+        try:
+            result = invoke()
+        except KeyboardInterrupt:
+            raise
+        except Exception as error:
+            last_error = error
+            retryable, last_classification, last_status = _retryable_delivery_failure(error)
+            if delivery_stats is not None:
+                key = str(last_status) if last_status is not None else last_classification
+                delivery_stats["failure_breakdown"][key] = delivery_stats["failure_breakdown"].get(key, 0) + 1
+                delivery_stats["retryable_failures" if retryable else "non_retryable_failures"] += 1
+            will_retry = retryable and attempt_number < MAX_DELIVERY_ATTEMPTS
+            backoff = DELIVERY_BACKOFF_SECONDS[attempt_number - 1] if will_retry else None
+            _append_jsonl(lifecycle_path, {
+                **entry, "event": "delivery_attempt_completed",
+                "delivery_attempt_number": attempt_number,
+                "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+                "started_at_utc": attempt_started, "completed_at_utc": _utc_now(),
+                "outcome": "pre_response_failure", "model_response_obtained": False,
+                "error_type": type(error).__name__, "http_status_code": last_status,
+                "failure_classification": last_classification, "retryable": retryable,
+                "will_retry": will_retry, "next_backoff_seconds": backoff,
+            })
+            if not will_retry:
+                break
+            if stage_callback:
+                stage_callback("delivery_backoff")
+            sleep_fn(backoff)
+        else:
+            _append_jsonl(lifecycle_path, {
+                **entry, "event": "delivery_attempt_completed",
+                "delivery_attempt_number": attempt_number,
+                "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
+                "started_at_utc": attempt_started, "completed_at_utc": _utc_now(),
+                "outcome": "model_response_obtained", "model_response_obtained": True,
+                "error_type": None, "http_status_code": None,
+                "failure_classification": None, "retryable": False,
+                "will_retry": False, "next_backoff_seconds": None,
+            })
+            if delivery_stats is not None:
+                delivery_stats["model_responses_on_attempt_1" if attempt_number == 1 else "model_responses_after_retry"] += 1
+            break
+    return {
+        "result": result, "attempts_used": attempt_number, "last_error": last_error,
+        "failure_classification": last_classification, "http_status_code": last_status,
+    }
+
+
 def _provider_error_record(entry: dict[str, Any], adapter: Any, error: Exception, latency_ms: float) -> RunRecord:
     baseline = get_baseline(entry["baseline_id"])
     config = _experiment_config()
@@ -718,86 +790,24 @@ def execute_experiment(
                     })
                 started_at = _utc_now()
                 started = perf_counter()
-                last_error: Exception | None = None
-                last_failure_classification: str | None = None
-                last_http_status_code: int | None = None
-                record: RunRecord | None = None
-                for attempt_number in range(1, MAX_DELIVERY_ATTEMPTS + 1):
-                    delivery_attempt_number = attempt_number
-                    delivery_attempt_started = True
-                    delivery_stats["total_delivery_attempts"] += 1
-                    delivery_stats["attempts_by_number"][str(attempt_number)] += 1
-                    attempt_started_at = _utc_now()
-                    _append_jsonl(lifecycle_path, {
-                        **entry,
-                        "event": "delivery_attempt_started",
-                        "delivery_attempt_number": attempt_number,
-                        "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
-                        "started_at_utc": attempt_started_at,
-                    })
-                    lifecycle_stage = "provider_invocation_in_flight"
-                    try:
-                        record = run_baseline(
-                            entry["baseline_id"], public_scenarios[entry["scenario_id"]], adapter,
-                            config, repetition_id=entry["repetition_id"], structured_output=True,
-                        )
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as error:
-                        last_error = error
-                        retryable, classification, status_code = _retryable_delivery_failure(error)
-                        last_failure_classification = classification
-                        last_http_status_code = status_code
-                        key = str(status_code) if status_code is not None else classification
-                        delivery_stats["failure_breakdown"][key] = delivery_stats["failure_breakdown"].get(key, 0) + 1
-                        delivery_stats["retryable_failures" if retryable else "non_retryable_failures"] += 1
-                        will_retry = retryable and attempt_number < MAX_DELIVERY_ATTEMPTS
-                        next_backoff = DELIVERY_BACKOFF_SECONDS[attempt_number - 1] if will_retry else None
-                        _append_jsonl(lifecycle_path, {
-                            **entry,
-                            "event": "delivery_attempt_completed",
-                            "delivery_attempt_number": attempt_number,
-                            "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
-                            "started_at_utc": attempt_started_at,
-                            "completed_at_utc": _utc_now(),
-                            "outcome": "pre_response_failure",
-                            "model_response_obtained": False,
-                            "error_type": type(error).__name__,
-                            "http_status_code": status_code,
-                            "failure_classification": classification,
-                            "retryable": retryable,
-                            "will_retry": will_retry,
-                            "next_backoff_seconds": next_backoff,
-                        })
-                        delivery_attempt_started = False
-                        if not will_retry:
-                            break
-                        lifecycle_stage = "delivery_backoff"
-                        sleep_fn(next_backoff)
-                        continue
-                    else:
-                        _append_jsonl(lifecycle_path, {
-                            **entry,
-                            "event": "delivery_attempt_completed",
-                            "delivery_attempt_number": attempt_number,
-                            "max_delivery_attempts": MAX_DELIVERY_ATTEMPTS,
-                            "started_at_utc": attempt_started_at,
-                            "completed_at_utc": _utc_now(),
-                            "outcome": "model_response_obtained",
-                            "model_response_obtained": True,
-                            "error_type": None,
-                            "http_status_code": None,
-                            "failure_classification": None,
-                            "retryable": False,
-                            "will_retry": False,
-                            "next_backoff_seconds": None,
-                        })
-                        delivery_attempt_started = False
-                        if attempt_number == 1:
-                            delivery_stats["model_responses_on_attempt_1"] += 1
-                        else:
-                            delivery_stats["model_responses_after_retry"] += 1
-                        break
+                def set_delivery_stage(value: str) -> None:
+                    nonlocal lifecycle_stage
+                    lifecycle_stage = value
+                delivery_attempt_started = True
+                delivery = run_delivery_attempts(
+                    entry, lifecycle_path,
+                    lambda: run_baseline(
+                        entry["baseline_id"], public_scenarios[entry["scenario_id"]], adapter,
+                        config, repetition_id=entry["repetition_id"], structured_output=True,
+                    ),
+                    sleep_fn, delivery_stats, set_delivery_stage,
+                )
+                delivery_attempt_started = False
+                record = delivery["result"]
+                delivery_attempt_number = delivery["attempts_used"]
+                last_error = delivery["last_error"]
+                last_failure_classification = delivery["failure_classification"]
+                last_http_status_code = delivery["http_status_code"]
                 if record is None:
                     assert last_error is not None
                     record = _provider_error_record(entry, adapter, last_error, (perf_counter() - started) * 1000)
