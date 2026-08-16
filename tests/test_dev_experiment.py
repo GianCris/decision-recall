@@ -35,6 +35,7 @@ from dr_baselines.output import DISCOVERY_RESPONSE_JSON_SCHEMA, DISCOVERY_RESPON
 
 
 GIT_SHA = "a" * 40
+NO_SLEEP = lambda _seconds: None
 
 
 class ScenarioAwareAdapter:
@@ -135,7 +136,7 @@ class DevExperimentTests(unittest.TestCase):
             stream.write(b" ")
         factory = Mock()
         with self.frozen_git(), self.assertRaises(DevExperimentError):
-            execute_experiment(output, factory)
+            execute_experiment(output, factory, sleep_fn=NO_SLEEP)
         factory.assert_not_called()
 
     def test_execute_refuses_modified_manifest_before_adapter_construction(self):
@@ -146,7 +147,7 @@ class DevExperimentTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         factory = Mock()
         with self.frozen_git(), self.assertRaises(DevExperimentError):
-            execute_experiment(output, factory)
+            execute_experiment(output, factory, sleep_fn=NO_SLEEP)
         factory.assert_not_called()
 
     def test_prepare_and_no_action_make_zero_provider_calls(self):
@@ -182,7 +183,7 @@ class DevExperimentTests(unittest.TestCase):
         output = self.prepared()
         adapter = ScenarioAwareAdapter()
         with self.frozen_git():
-            summary = execute_experiment(output, lambda: adapter)
+            summary = execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         self.assertEqual(len(adapter.calls), 72)
         self.assertTrue(adapter.closed)
         self.assertTrue(all(call["response_schema"] is DISCOVERY_RESPONSE_JSON_SCHEMA for call in adapter.calls))
@@ -193,6 +194,7 @@ class DevExperimentTests(unittest.TestCase):
             self.assertNotIn("evaluation", call["prompt"])
             self.assertNotIn("decision_labels", call["prompt"])
         self.assertEqual(summary["experiment_status"], "completed")
+        self.assertTrue(summary["official_result_eligible"])
         self.assertEqual(len(summary["per_scenario"]["dev-001"]["B0"]["evaluations"]), 3)
         self.assertIn("dependency_strength_accuracy", summary["descriptive_B1_minus_B0"]["macro"])
 
@@ -200,7 +202,7 @@ class DevExperimentTests(unittest.TestCase):
         output = self.prepared()
         adapter = ScenarioAwareAdapter()
         with self.frozen_git():
-            execute_experiment(output, lambda: adapter)
+            execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         first_pair = adapter.calls[:2]
         prompts = {"implicit": None, "structured": None}
         for call in first_pair:
@@ -212,6 +214,40 @@ class DevExperimentTests(unittest.TestCase):
                 self.assertIn("evidence_available", call["prompt"])
         self.assertTrue(all(prompts.values()))
         self.assertEqual(first_pair[0]["response_schema"], first_pair[1]["response_schema"])
+
+    def test_fixed_pacing_is_sequential_identical_and_has_no_first_delay(self):
+        output = self.prepared()
+        adapter = ScenarioAwareAdapter()
+        events = []
+        original_generate = adapter.generate
+        def generate(prompt, config, response_schema=None):
+            events.append(("provider", len(adapter.calls) + 1))
+            return original_generate(prompt, config, response_schema=response_schema)
+        adapter.generate = generate
+        def sleeper(seconds):
+            events.append(("sleep", seconds))
+        with self.frozen_git():
+            execute_experiment(output, lambda: adapter, sleep_fn=sleeper)
+        self.assertEqual(events[0], ("provider", 1))
+        self.assertEqual(events[1], ("sleep", 10))
+        self.assertEqual(events[2], ("provider", 2))
+        self.assertEqual(sum(event[0] == "sleep" for event in events), 71)
+        self.assertTrue(all(event[1] == 10 for event in events if event[0] == "sleep"))
+        self.assertTrue(all(call["config"].generation_config == adapter.calls[0]["config"].generation_config for call in adapter.calls))
+
+    def test_provider_error_aborts_without_post_error_delay_retry_or_replacement(self):
+        output = self.prepared()
+        adapter = ScenarioAwareAdapter(failures={3: RuntimeError("capacity")})
+        sleeper = Mock()
+        with self.frozen_git():
+            summary = execute_experiment(output, lambda: adapter, sleep_fn=sleeper)
+        self.assertEqual(len(adapter.calls), 3)
+        self.assertEqual(sleeper.call_count, 2)
+        self.assertTrue(all(args.args == (10,) for args in sleeper.call_args_list))
+        self.assertEqual(summary["provider_error_runs"], 1)
+        self.assertEqual(summary["attempted_calls"], 3)
+        self.assertEqual(summary["provider_error_position"]["global_call_index"], 3)
+        self.assertEqual(summary["abort_reason"], "provider_error")
 
     def test_run_metadata_is_complete_and_evaluation_follows_persistence(self):
         output = self.prepared()
@@ -227,7 +263,7 @@ class DevExperimentTests(unittest.TestCase):
             return real_evaluate(scenario, candidate)
 
         with self.frozen_git(), patch("dr_baselines.dev_experiment.evaluate_discovery", side_effect=evaluate):
-            execute_experiment(output, lambda: adapter)
+            execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         runs = [json.loads(line) for line in (output / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(runs), 72)
         required = {
@@ -241,43 +277,56 @@ class DevExperimentTests(unittest.TestCase):
             "parsed_candidate_response", "validation_status", "validation_error", "provider_error",
         }
         self.assertTrue(required <= runs[0].keys())
-        self.assertEqual(runs[0]["experiment_config_version"], "dev-baselines-v0.2")
+        self.assertEqual(runs[0]["experiment_config_version"], "dev-baselines-v0.3")
         self.assertTrue(runs[0]["generation"]["native_structured_output"])
         self.assertEqual(runs[0]["response_schema_sha256"], SCHEMA_SHA256)
         self.assertEqual(runs[0]["transport"], {"timeout_ms": 120000, "timeout_seconds": 120, "attempts": 1})
+        config_metadata = dict(runs[0]["experiment_config"]["generation_config"])
+        self.assertEqual(config_metadata["inter_call_delay_seconds"], 10)
+        self.assertIs(config_metadata["first_call_pre_delay"], False)
+        self.assertIs(config_metadata["pacing_jitter"], False)
+        self.assertIs(config_metadata["adaptive_throttling"], False)
+        self.assertEqual(config_metadata["concurrency"], 1)
 
     def test_invalid_and_isolated_errors_persist_without_retry(self):
         invalid_output = self.prepared()
         invalid_adapter = ScenarioAwareAdapter(invalid=True)
         with self.frozen_git():
-            invalid_summary = execute_experiment(invalid_output, lambda: invalid_adapter)
+            invalid_summary = execute_experiment(invalid_output, lambda: invalid_adapter, sleep_fn=NO_SLEEP)
         self.assertEqual(len(invalid_adapter.calls), 72)
         self.assertEqual(invalid_summary["invalid_runs"], 72)
+        self.assertEqual(invalid_summary["experiment_status"], "completed")
+        self.assertTrue(invalid_summary["official_result_eligible"])
 
         error_output = self.prepared()
         error_adapter = ScenarioAwareAdapter(failures={1: RuntimeError("temporary")})
         with self.frozen_git():
-            error_summary = execute_experiment(error_output, lambda: error_adapter)
-        self.assertEqual(len(error_adapter.calls), 72)
+            error_summary = execute_experiment(error_output, lambda: error_adapter, sleep_fn=NO_SLEEP)
+        self.assertEqual(len(error_adapter.calls), 1)
         self.assertEqual(error_summary["provider_error_runs"], 1)
-        self.assertEqual(error_summary["experiment_status"], "completed")
+        self.assertEqual(error_summary["experiment_status"], "aborted")
+        self.assertEqual(error_summary["aggregate_status"], "PARTIAL / ABORTED")
+        self.assertFalse(error_summary["official_result_eligible"])
+        self.assertEqual(error_summary["abort_reason"], "provider_error")
+        self.assertEqual(error_summary["provider_error_position"]["global_call_index"], 1)
 
     def test_systemic_error_persists_attempt_and_aborts(self):
         output = self.prepared()
         adapter = ScenarioAwareAdapter(failures={1: GeminiAuthenticationError("bad ADC")})
         with self.frozen_git():
-            summary = execute_experiment(output, lambda: adapter)
+            summary = execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         self.assertEqual(len(adapter.calls), 1)
         self.assertEqual(summary["experiment_status"], "aborted")
         self.assertEqual(summary["aggregate_status"], "PARTIAL / ABORTED")
         self.assertFalse(summary["official_result_eligible"])
         self.assertEqual(summary["attempted_calls"], 1)
+        self.assertEqual(summary["abort_reason"], "provider_error")
 
     def test_keyboard_interrupt_on_first_invocation_writes_truthful_abort(self):
         output = self.prepared()
         adapter = ScenarioAwareAdapter(failures={1: KeyboardInterrupt()})
         with self.frozen_git():
-            summary = execute_experiment(output, lambda: adapter)
+            summary = execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         self.assertEqual(len(adapter.calls), 1)
         self.assertEqual(summary["experiment_status"], "aborted")
         self.assertEqual(summary["aggregate_status"], "PARTIAL / ABORTED")
@@ -301,7 +350,7 @@ class DevExperimentTests(unittest.TestCase):
         output = self.prepared()
         adapter = ScenarioAwareAdapter(failures={4: KeyboardInterrupt()})
         with self.frozen_git():
-            summary = execute_experiment(output, lambda: adapter)
+            summary = execute_experiment(output, lambda: adapter, sleep_fn=NO_SLEEP)
         self.assertEqual(len(adapter.calls), 4)
         self.assertEqual(summary["provider_invocations_started"], 4)
         self.assertEqual(summary["completed_provider_calls"], 3)
@@ -312,7 +361,7 @@ class DevExperimentTests(unittest.TestCase):
         self.assertEqual(summary["interrupted_position"]["global_call_index"], 4)
         replacement = Mock()
         with self.frozen_git(), self.assertRaises(DevExperimentError):
-            execute_experiment(output, replacement)
+            execute_experiment(output, replacement, sleep_fn=NO_SLEEP)
         replacement.assert_not_called()
 
     def test_public_transport_configuration_is_exact(self):
@@ -362,10 +411,19 @@ class DevExperimentTests(unittest.TestCase):
         self.assertEqual(manifest["response_schema_version"], DISCOVERY_RESPONSE_SCHEMA_VERSION)
         self.assertEqual(manifest["response_schema_sha256"], SCHEMA_SHA256)
         self.assertEqual(manifest["sdk_version"], "2.14.0")
-        self.assertEqual(manifest["experiment_version"], "dev-baselines-v0.2")
+        self.assertEqual(manifest["experiment_version"], "dev-baselines-v0.3")
         self.assertEqual(manifest["transport"]["timeout_ms"], 120000)
         self.assertEqual(manifest["transport"]["timeout_seconds"], 120)
         self.assertEqual(manifest["transport"]["attempts"], 1)
+        self.assertEqual(manifest["pacing"], {
+            "inter_call_delay_seconds": 10,
+            "first_call_pre_delay": False,
+            "jitter": False,
+            "adaptive_throttling": False,
+            "concurrency": 1,
+            "policy": "fixed delay before each planned slot after the first",
+        })
+        self.assertEqual(manifest["failure_policy"]["provider_error"], "persist_and_abort_no_retry")
         self.assertEqual(manifest["baseline_allowlist"], ["B0", "B1"])
         self.assertNotIn("B2", json.dumps(json.loads((output / PLAN_FILENAME).read_text())))
 

@@ -88,9 +88,15 @@ Git commit, tracked source modifications, existing run artifacts, non-DEV IDs,
 or any output path containing a sealed-holdout component. Untracked historical
 output directories do not affect the tracked-source cleanliness check.
 
-The `dev-baselines-v0.2` transport policy uses the public `google-genai`
+The `dev-baselines-v0.3` transport policy uses the public `google-genai`
 `HttpOptions` API with `timeout=120000` milliseconds and
 `HttpRetryOptions(attempts=1)`. The latter counts the original request and
 therefore disables SDK retries. An operator interruption writes an append-only
 `attempt_lifecycle.jsonl` event and an aborted, non-official `summary.json`;
 the interrupted directory cannot be resumed or reused.
+
+Version 0.3 adds a fixed, sequential 10-second delay before every planned call
+after the first, with no jitter, adaptation, or concurrency. A returned but
+invalid model response remains eligible model behavior and execution continues.
+Any provider error is persisted once and immediately aborts the run as partial,
+non-official, with no delay, retry, replacement call, or automatic new run.

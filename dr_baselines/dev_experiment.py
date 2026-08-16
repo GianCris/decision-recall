@@ -11,10 +11,9 @@ from datetime import datetime, timezone
 from importlib.metadata import version as package_version
 from itertools import combinations
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any, Callable
 
-from google.genai import errors as genai_errors
 from google.genai import types
 
 from dr_bench import evaluate_discovery, load_scenario
@@ -25,7 +24,6 @@ from .google_adapter import (
     LOCATION,
     MODEL_ID,
     PROJECT_ID,
-    GeminiAuthenticationError,
     GeminiVertexAdapter,
 )
 from .output import (
@@ -36,7 +34,7 @@ from .output import (
 from .records import RunRecord
 from .runner import run_baseline, with_structured_output_metadata
 
-EXPERIMENT_VERSION = "dev-baselines-v0.2"
+EXPERIMENT_VERSION = "dev-baselines-v0.3"
 SDK_PACKAGE = "google-genai"
 SDK_VERSION = "2.14.0"
 DEV_SCENARIOS = tuple(f"dev-{number:03d}" for number in range(1, 13))
@@ -54,6 +52,7 @@ ATTEMPT_LIFECYCLE_FILENAME = "attempt_lifecycle.jsonl"
 TRANSPORT_TIMEOUT_MS = 120_000
 TRANSPORT_TIMEOUT_SECONDS = 120
 TRANSPORT_ATTEMPTS = 1
+INTER_CALL_DELAY_SECONDS = 10
 
 
 class DevExperimentError(RuntimeError):
@@ -191,10 +190,18 @@ def _manifest_design(git_sha: str, plan_sha: str) -> dict[str, Any]:
             "configuration_api": "google.genai.types.HttpOptions",
             "retry_configuration_api": "google.genai.types.HttpRetryOptions",
         },
+        "pacing": {
+            "inter_call_delay_seconds": INTER_CALL_DELAY_SECONDS,
+            "first_call_pre_delay": False,
+            "jitter": False,
+            "adaptive_throttling": False,
+            "concurrency": 1,
+            "policy": "fixed delay before each planned slot after the first",
+        },
         "failure_policy": {
             "invalid_response": "persist_and_continue_no_retry",
-            "isolated_provider_error": "persist_and_continue_no_retry",
-            "systemic_error": "persist_and_abort_no_retry",
+            "provider_error": "persist_and_abort_no_retry",
+            "operator_interrupt": "persist_interruption_and_abort_no_retry",
         },
         "execution_plan_sha256": plan_sha,
         "paired_order_rule": ORDER_RULE,
@@ -268,6 +275,13 @@ def _experiment_config() -> ExperimentConfig:
             dataset_version="0.1",
             scenario_ids=DEV_SCENARIOS,
             candidate_view_contract_version="0.1",
+            generation_config=(
+                ("inter_call_delay_seconds", INTER_CALL_DELAY_SECONDS),
+                ("first_call_pre_delay", False),
+                ("pacing_jitter", False),
+                ("adaptive_throttling", False),
+                ("concurrency", 1),
+            ),
         ),
         True,
     )
@@ -355,12 +369,6 @@ def _provider_error_record(entry: dict[str, Any], adapter: Any, error: Exception
         latency_ms=latency_ms,
         repetition_id=entry["repetition_id"],
     )
-
-
-def _is_systemic(error: Exception) -> bool:
-    if isinstance(error, (GeminiAuthenticationError, ValueError)):
-        return True
-    return isinstance(error, genai_errors.ClientError) and error.code in {400, 401, 403, 404}
 
 
 def _mean(values: list[float]) -> float | None:
@@ -473,8 +481,16 @@ def build_summary(
     provider_invocations_started: int | None = None,
     provider_invocations_completed: int | None = None,
     interrupted_position: dict[str, Any] | None = None,
+    provider_error_position: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    completed = len(runs) == TOTAL_CALLS and abort_reason is None
+    provider_error_count = sum(run["validation_status"] == "provider_error" for run in runs)
+    started_count = provider_invocations_started if provider_invocations_started is not None else len(runs)
+    completed = (
+        len(runs) == TOTAL_CALLS
+        and started_count == TOTAL_CALLS
+        and provider_error_count == 0
+        and abort_reason is None
+    )
     per_baseline: dict[str, Any] = {}
     for baseline_id in DEV_BASELINES:
         baseline_runs = [run for run in runs if run["baseline_id"] == baseline_id]
@@ -554,7 +570,7 @@ def build_summary(
         "persisted_evaluations": len(evaluated),
         "valid_runs": sum(run["validation_status"] == "valid" for run in runs),
         "invalid_runs": sum(run["validation_status"] == "invalid" for run in runs),
-        "provider_error_runs": sum(run["validation_status"] == "provider_error" for run in runs),
+        "provider_error_runs": provider_error_count,
         "abort_reason": abort_reason,
         "last_global_call_index_attempted": (
             interrupted_position["global_call_index"]
@@ -562,6 +578,7 @@ def build_summary(
             else (runs[-1]["global_call_index"] if runs else None)
         ),
         "interrupted_position": interrupted_position,
+        "provider_error_position": provider_error_position,
         "per_baseline": per_baseline,
         "by_repetition": by_repetition,
         "per_scenario": per_scenario,
@@ -573,6 +590,7 @@ def build_summary(
 def execute_experiment(
     output_dir: Path,
     adapter_factory: Callable[[], Any] = _dev_adapter_factory,
+    sleep_fn: Callable[[float], None] = sleep,
 ) -> dict[str, Any]:
     plan, manifest, _ = _load_and_validate_prepared(output_dir)
     config = _experiment_config()
@@ -587,14 +605,25 @@ def execute_experiment(
     provider_invocations_started = 0
     provider_invocations_completed = 0
     interrupted_position: dict[str, Any] | None = None
+    provider_error_position: dict[str, Any] | None = None
     lifecycle_path = output_dir / ATTEMPT_LIFECYCLE_FILENAME
     adapter = adapter_factory()
     try:
         for entry in plan:
-            started_at = _utc_now()
-            started = perf_counter()
             lifecycle_stage = "planned"
             try:
+                if entry["global_call_index"] > 1:
+                    lifecycle_stage = "inter_call_delay"
+                    sleep_fn(INTER_CALL_DELAY_SECONDS)
+                    _append_jsonl(lifecycle_path, {
+                        **entry,
+                        "event": "inter_call_delay_completed",
+                        "timestamp_utc": _utc_now(),
+                        "delay_seconds": INTER_CALL_DELAY_SECONDS,
+                    })
+                    lifecycle_stage = "planned"
+                started_at = _utc_now()
+                started = perf_counter()
                 _append_jsonl(lifecycle_path, {
                     **entry,
                     "event": "provider_invocation_started",
@@ -615,7 +644,6 @@ def execute_experiment(
                     raise
                 except Exception as error:
                     record = _provider_error_record(entry, adapter, error, (perf_counter() - started) * 1000)
-                    systemic = _is_systemic(error)
                     _append_jsonl(lifecycle_path, {
                         **entry,
                         "event": "provider_invocation_failed",
@@ -623,7 +651,6 @@ def execute_experiment(
                         "error_type": type(error).__name__,
                     })
                 else:
-                    systemic = False
                     provider_invocations_completed += 1
                     lifecycle_stage = "provider_invocation_completed"
                     _append_jsonl(lifecycle_path, {
@@ -659,8 +686,19 @@ def execute_experiment(
                         "event": "evaluation_persisted",
                         "timestamp_utc": _utc_now(),
                     })
-                if systemic:
-                    abort_reason = record.provider_error
+                if record.validation_status == "provider_error":
+                    abort_reason = "provider_error"
+                    provider_error_position = {
+                        "global_call_index": entry["global_call_index"],
+                        "scenario_id": entry["scenario_id"],
+                        "repetition_id": entry["repetition_id"],
+                        "baseline_id": entry["baseline_id"],
+                        "condition": entry["condition"],
+                        "pair_id": entry["pair_id"],
+                        "pair_order": entry["pair_order"],
+                        "order_within_pair": entry["order_within_pair"],
+                        "provider_error": record.provider_error,
+                    }
                     break
             except KeyboardInterrupt:
                 abort_reason = "operator_interrupt"
@@ -693,6 +731,7 @@ def execute_experiment(
         provider_invocations_started,
         provider_invocations_completed,
         interrupted_position,
+        provider_error_position,
     )
     (output_dir / "summary.json").write_bytes(_canonical_json(summary))
     return summary
