@@ -627,10 +627,10 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
     )
     if infrastructure_complete and scientific_outputs_complete:
         classification_status = None
-    elif infrastructure_complete and final_invalid_outputs:
-        classification_status = "INCOMPLETE / MODEL OUTPUT"
     elif infrastructure_complete and intermediate_failures:
         classification_status = "FAIL / DO NOT ADVANCE"
+    elif infrastructure_complete and final_invalid_outputs:
+        classification_status = "INCOMPLETE / MODEL OUTPUT"
     else:
         classification_status = "INCOMPLETE / INFRASTRUCTURE"
     summary = {
@@ -701,7 +701,12 @@ def analyze(output_dir: Path, analysis_dir: Path) -> dict[str, Any]:
             ledger.append({"scenario_id": run["scenario_id"], "decision_id": prediction["decision_id"], "condition_id": run["condition_id"], "repetition_id": "1", "true_materially_dependent": label["materially_dependent"], "predicted_materially_dependent": prediction["materially_dependent"], "true_still_justified": label["still_justified"], "predicted_still_justified": prediction["still_justified"], "true_dependency_strength": label["dependency_strength"], "predicted_dependency_strength": prediction["dependency_strength"]})
     by_condition = {c: [x for x in ledger if x["condition_id"] == c] for c in FINAL_CONDITIONS}
     complete = bool(summary.get("screening_complete"))
-    incomplete_status = "INCOMPLETE / MODEL OUTPUT" if summary.get("final_invalid_outputs", 0) else "INCOMPLETE / INFRASTRUCTURE"
+    if summary.get("intermediate_failures", 0):
+        incomplete_status = "UNAVAILABLE / INTERMEDIATE FAILURE"
+    elif summary.get("final_invalid_outputs", 0):
+        incomplete_status = "INCOMPLETE / MODEL OUTPUT"
+    else:
+        incomplete_status = "INCOMPLETE / INFRASTRUCTURE"
     comparisons = {"RB0_vs_RC0": classify_contrast(by_condition["RB0"], by_condition["RC0"], complete, incomplete_status), "RB0_vs_RR1": classify_contrast(by_condition["RB0"], by_condition["RR1"], complete, incomplete_status), "RC0_vs_RB1": classify_contrast(by_condition["RC0"], by_condition["RB1"], complete, incomplete_status), "RB1_vs_RB2": classify_contrast(by_condition["RB1"], by_condition["RB2"], complete, incomplete_status), "RB2_vs_RB3": classify_contrast(by_condition["RB2"], by_condition["RB3"], complete, incomplete_status)}
     artifacts_path = output_dir / "stage1_artifacts.jsonl"; artifacts = [json.loads(x) for x in artifacts_path.read_text(encoding="utf-8").splitlines() if x] if artifacts_path.exists() else []
     raw_path = output_dir / "stage1_raw.jsonl"; stage1_raw = [json.loads(x) for x in raw_path.read_text(encoding="utf-8").splitlines() if x] if raw_path.exists() else []
@@ -719,7 +724,7 @@ def analyze(output_dir: Path, analysis_dir: Path) -> dict[str, Any]:
         "RB2": add_cost(stage_cost["SHARED_RECONSTRUCTION_STAGE1"], stage_cost["RB2"]),
         "RB3": add_cost(stage_cost["SHARED_RECONSTRUCTION_STAGE1"], stage_cost["RB3"]),
     }
-    analysis = {"analysis_version": "round-b-screening-analysis-v0.1", "screening_complete": complete, "classification_status": summary.get("classification_status"), "infrastructure_complete": summary.get("infrastructure_complete", False), "final_runs_persisted": summary.get("final_runs_persisted", 0), "final_valid_outputs": summary.get("final_valid_outputs", 0), "final_invalid_outputs": summary.get("final_invalid_outputs", 0), "evaluations_persisted": summary.get("evaluations_persisted", 0), "intermediate_failure_count": summary.get("intermediate_failures", 0), "primary_unit": "scenario_id + decision_id", "per_condition": {c: _condition_metrics(by_condition[c]) for c in FINAL_CONDITIONS}, "precommitted_comparisons": comparisons, "cost_accounting": {"tournament_amortized_by_stage": dict(stage_cost), "standalone_pipeline": standalone}, "intermediate_artifact_count": len(artifacts), "stage1_excluded_from_discovery_denominators": True, "rc0_claim_boundary": "RC0 does not match specialized semantic work; RB1 > RC0 cannot prove relationship structure alone caused a gain", "confirmation_authorized": False, "claim_boundary": "DEV screening only; PROMISING DEVELOPMENT EVIDENCE at most"}
+    analysis = {"analysis_version": "round-b-screening-analysis-v0.1", "screening_complete": complete, "classification_status": summary.get("classification_status"), "infrastructure_complete": summary.get("infrastructure_complete", False), "final_runs_persisted": summary.get("final_runs_persisted", 0), "final_valid_outputs": summary.get("final_valid_outputs", 0), "final_invalid_outputs": summary.get("final_invalid_outputs", 0), "evaluations_persisted": summary.get("evaluations_persisted", 0), "intermediate_failures": summary.get("intermediate_failures", 0), "primary_unit": "scenario_id + decision_id", "per_condition": {c: _condition_metrics(by_condition[c]) for c in FINAL_CONDITIONS}, "precommitted_comparisons": comparisons, "cost_accounting": {"tournament_amortized_by_stage": dict(stage_cost), "standalone_pipeline": standalone}, "intermediate_artifact_count": len(artifacts), "stage1_excluded_from_discovery_denominators": True, "rc0_claim_boundary": "RC0 does not match specialized semantic work; RB1 > RC0 cannot prove relationship structure alone caused a gain", "confirmation_authorized": False, "claim_boundary": "DEV screening only; PROMISING DEVELOPMENT EVIDENCE at most"}
     analysis_dir.mkdir()
     fields = list(ledger[0]) if ledger else ["scenario_id", "decision_id", "condition_id"]
     with (analysis_dir / "decision_prediction_ledger.csv").open("w", encoding="utf-8", newline="") as stream:

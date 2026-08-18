@@ -209,6 +209,21 @@ class RoundBTests(unittest.TestCase):
         self.assertEqual(sum(x["terminal_state"] == "downstream_blocked" for x in states), 36)
         self.assertTrue(all(not x["model_call_executed"] for x in states if x["terminal_state"] == "downstream_blocked"))
 
+    def test_intermediate_failure_precedes_final_invalid_in_summary_and_analysis(self):
+        output = self.prepared(); adapter = FakeAdapter(invalid_reconstruction=True, invalid_final_on={3})
+        with self.frozen_git(): summary = execute(output, adapter_factory=lambda: adapter, sleep_fn=lambda _: None)
+        self.assertTrue(summary["infrastructure_complete"])
+        self.assertEqual(summary["intermediate_failures"], 12)
+        self.assertEqual(summary["final_invalid_outputs"], 1)
+        self.assertEqual(summary["classification_status"], "FAIL / DO NOT ADVANCE")
+        self.assertEqual(summary["provider_failures"], 0)
+        analysis = analyze(output, output.parent / "mixed-analysis")
+        self.assertEqual(analysis["classification_status"], "FAIL / DO NOT ADVANCE")
+        self.assertEqual(analysis["intermediate_failures"], 12)
+        self.assertEqual(analysis["final_invalid_outputs"], 1)
+        self.assertNotIn(analysis["classification_status"], {"INCOMPLETE / MODEL OUTPUT", "INCOMPLETE / INFRASTRUCTURE"})
+        self.assertTrue(all(value["status"] == "UNAVAILABLE / INTERMEDIATE FAILURE" for value in analysis["precommitted_comparisons"].values()))
+
     def test_provider_failure_is_distinct_persisted_and_not_retried(self):
         output = self.prepared(); adapter = FakeAdapter(fail_on={3})
         with self.frozen_git(): summary = execute(output, adapter_factory=lambda: adapter, sleep_fn=lambda _: None)
