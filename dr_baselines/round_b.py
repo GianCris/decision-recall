@@ -611,19 +611,41 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
                 break
     finally:
         if hasattr(adapter, "close"): adapter.close()
+    final_runs_persisted = len(runs)
+    final_valid_outputs = sum(x["validation_status"] == "valid" for x in runs)
+    final_invalid_outputs = sum(x["validation_status"] == "invalid" for x in runs)
+    evaluations_persisted = len(evaluations)
     infrastructure_complete = not aborted and len(terminal) == 96 and provider_failures == 0
-    scientific_outputs_complete = intermediate_failures == 0 and len(runs) == 72
+    scientific_outputs_complete = (
+        final_runs_persisted == 72
+        and final_valid_outputs == 72
+        and final_invalid_outputs == 0
+        and evaluations_persisted == 72
+        and intermediate_failures == 0
+        and provider_failures == 0
+        and not aborted
+    )
+    if infrastructure_complete and scientific_outputs_complete:
+        classification_status = None
+    elif infrastructure_complete and final_invalid_outputs:
+        classification_status = "INCOMPLETE / MODEL OUTPUT"
+    elif infrastructure_complete and intermediate_failures:
+        classification_status = "FAIL / DO NOT ADVANCE"
+    else:
+        classification_status = "INCOMPLETE / INFRASTRUCTURE"
     summary = {
         "experiment_version": EXPERIMENT_VERSION, "experiment_status": "aborted" if aborted else "completed",
         "conceptual_slots_planned": 96, "conceptual_slots_terminal": len(terminal),
         "model_calls_with_response": sum(x.get("validation_status") != "provider_error" for x in runs) + len(artifacts) + intermediate_failures,
-        "final_outputs_possible": 72, "final_runs_persisted": len(runs), "evaluations_persisted": len(evaluations),
+        "final_outputs_possible": 72, "final_runs_persisted": final_runs_persisted,
+        "final_valid_outputs": final_valid_outputs, "final_invalid_outputs": final_invalid_outputs,
+        "evaluations_persisted": evaluations_persisted,
         "provider_failures": provider_failures, "intermediate_failures": intermediate_failures,
-        "downstream_blocked": blocked, "final_invalid_outputs": sum(x["validation_status"] == "invalid" for x in runs),
+        "downstream_blocked": blocked,
         "infrastructure_complete": infrastructure_complete,
         "scientific_outputs_complete": scientific_outputs_complete,
         "screening_complete": infrastructure_complete and scientific_outputs_complete,
-        "classification_status": (None if infrastructure_complete and scientific_outputs_complete else "FAIL / DO NOT ADVANCE" if infrastructure_complete and intermediate_failures else "INCOMPLETE / INFRASTRUCTURE"),
+        "classification_status": classification_status,
         "abort_reason": "operator_interrupt" if aborted else None, "interrupted_position": interrupted,
         "input_tokens": sum((x.get("input_tokens") or 0) for x in runs), "output_tokens": sum((x.get("output_tokens") or 0) for x in runs), "latency_ms": sum((x.get("latency_ms") or 0) for x in runs),
         "claim_boundary": "Round B DEV screening only; not generalization evidence",
@@ -641,10 +663,13 @@ def _condition_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"TP": tp, "TN": tn, "FP": fp, "FN": fn, "precision": precision, "recall": recall, "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0, "unique_binary_failures": len({(x["scenario_id"], x["decision_id"]) for x in rows if x["true_materially_dependent"] != x["predicted_materially_dependent"]}), "still_justified_errors": sum(x["true_still_justified"] != x["predicted_still_justified"] for x in rows), "dependency_strength_errors": sum(x["true_dependency_strength"] != x["predicted_dependency_strength"] for x in rows), "material_false_negatives": fn}
 
 
-def classify_contrast(control_rows: list[dict[str, Any]], candidate_rows: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
-    if not complete: return {"status": "INCOMPLETE / INFRASTRUCTURE", "improved_units": [], "regressed_units": []}
+def classify_contrast(
+    control_rows: list[dict[str, Any]], candidate_rows: list[dict[str, Any]], complete: bool,
+    incomplete_status: str = "INCOMPLETE / INFRASTRUCTURE",
+) -> dict[str, Any]:
+    if not complete: return {"status": incomplete_status, "improved_units": [], "regressed_units": []}
     control = {(x["scenario_id"], x["decision_id"]): x for x in control_rows}; candidate = {(x["scenario_id"], x["decision_id"]): x for x in candidate_rows}
-    if set(control) != set(candidate): return {"status": "INCOMPLETE / INFRASTRUCTURE", "improved_units": [], "regressed_units": []}
+    if set(control) != set(candidate): return {"status": incomplete_status, "improved_units": [], "regressed_units": []}
     improved, regressed = defaultdict(list), defaultdict(list)
     for key in sorted(control):
         for field in ("materially_dependent", "still_justified"):
@@ -676,7 +701,8 @@ def analyze(output_dir: Path, analysis_dir: Path) -> dict[str, Any]:
             ledger.append({"scenario_id": run["scenario_id"], "decision_id": prediction["decision_id"], "condition_id": run["condition_id"], "repetition_id": "1", "true_materially_dependent": label["materially_dependent"], "predicted_materially_dependent": prediction["materially_dependent"], "true_still_justified": label["still_justified"], "predicted_still_justified": prediction["still_justified"], "true_dependency_strength": label["dependency_strength"], "predicted_dependency_strength": prediction["dependency_strength"]})
     by_condition = {c: [x for x in ledger if x["condition_id"] == c] for c in FINAL_CONDITIONS}
     complete = bool(summary.get("screening_complete"))
-    comparisons = {"RB0_vs_RC0": classify_contrast(by_condition["RB0"], by_condition["RC0"], complete), "RB0_vs_RR1": classify_contrast(by_condition["RB0"], by_condition["RR1"], complete), "RC0_vs_RB1": classify_contrast(by_condition["RC0"], by_condition["RB1"], complete), "RB1_vs_RB2": classify_contrast(by_condition["RB1"], by_condition["RB2"], complete), "RB2_vs_RB3": classify_contrast(by_condition["RB2"], by_condition["RB3"], complete)}
+    incomplete_status = "INCOMPLETE / MODEL OUTPUT" if summary.get("final_invalid_outputs", 0) else "INCOMPLETE / INFRASTRUCTURE"
+    comparisons = {"RB0_vs_RC0": classify_contrast(by_condition["RB0"], by_condition["RC0"], complete, incomplete_status), "RB0_vs_RR1": classify_contrast(by_condition["RB0"], by_condition["RR1"], complete, incomplete_status), "RC0_vs_RB1": classify_contrast(by_condition["RC0"], by_condition["RB1"], complete, incomplete_status), "RB1_vs_RB2": classify_contrast(by_condition["RB1"], by_condition["RB2"], complete, incomplete_status), "RB2_vs_RB3": classify_contrast(by_condition["RB2"], by_condition["RB3"], complete, incomplete_status)}
     artifacts_path = output_dir / "stage1_artifacts.jsonl"; artifacts = [json.loads(x) for x in artifacts_path.read_text(encoding="utf-8").splitlines() if x] if artifacts_path.exists() else []
     raw_path = output_dir / "stage1_raw.jsonl"; stage1_raw = [json.loads(x) for x in raw_path.read_text(encoding="utf-8").splitlines() if x] if raw_path.exists() else []
     stage_cost = defaultdict(lambda: {"model_calls": 0, "delivery_attempts": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0})
@@ -693,7 +719,7 @@ def analyze(output_dir: Path, analysis_dir: Path) -> dict[str, Any]:
         "RB2": add_cost(stage_cost["SHARED_RECONSTRUCTION_STAGE1"], stage_cost["RB2"]),
         "RB3": add_cost(stage_cost["SHARED_RECONSTRUCTION_STAGE1"], stage_cost["RB3"]),
     }
-    analysis = {"analysis_version": "round-b-screening-analysis-v0.1", "screening_complete": complete, "infrastructure_complete": summary.get("infrastructure_complete", False), "intermediate_failure_count": summary.get("intermediate_failures", 0), "primary_unit": "scenario_id + decision_id", "per_condition": {c: _condition_metrics(by_condition[c]) for c in FINAL_CONDITIONS}, "precommitted_comparisons": comparisons, "cost_accounting": {"tournament_amortized_by_stage": dict(stage_cost), "standalone_pipeline": standalone}, "intermediate_artifact_count": len(artifacts), "stage1_excluded_from_discovery_denominators": True, "rc0_claim_boundary": "RC0 does not match specialized semantic work; RB1 > RC0 cannot prove relationship structure alone caused a gain", "confirmation_authorized": False, "claim_boundary": "DEV screening only; PROMISING DEVELOPMENT EVIDENCE at most"}
+    analysis = {"analysis_version": "round-b-screening-analysis-v0.1", "screening_complete": complete, "classification_status": summary.get("classification_status"), "infrastructure_complete": summary.get("infrastructure_complete", False), "final_runs_persisted": summary.get("final_runs_persisted", 0), "final_valid_outputs": summary.get("final_valid_outputs", 0), "final_invalid_outputs": summary.get("final_invalid_outputs", 0), "evaluations_persisted": summary.get("evaluations_persisted", 0), "intermediate_failure_count": summary.get("intermediate_failures", 0), "primary_unit": "scenario_id + decision_id", "per_condition": {c: _condition_metrics(by_condition[c]) for c in FINAL_CONDITIONS}, "precommitted_comparisons": comparisons, "cost_accounting": {"tournament_amortized_by_stage": dict(stage_cost), "standalone_pipeline": standalone}, "intermediate_artifact_count": len(artifacts), "stage1_excluded_from_discovery_denominators": True, "rc0_claim_boundary": "RC0 does not match specialized semantic work; RB1 > RC0 cannot prove relationship structure alone caused a gain", "confirmation_authorized": False, "claim_boundary": "DEV screening only; PROMISING DEVELOPMENT EVIDENCE at most"}
     analysis_dir.mkdir()
     fields = list(ledger[0]) if ledger else ["scenario_id", "decision_id", "condition_id"]
     with (analysis_dir / "decision_prediction_ledger.csv").open("w", encoding="utf-8", newline="") as stream:

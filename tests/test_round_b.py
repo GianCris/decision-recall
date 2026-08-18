@@ -63,10 +63,11 @@ def support_value(source):
 class FakeAdapter:
     identifier = "round-b-fake"
 
-    def __init__(self, invalid_reconstruction=False, fail_on=None):
+    def __init__(self, invalid_reconstruction=False, fail_on=None, invalid_final_on=None):
         self.calls = []
         self.invalid_reconstruction = invalid_reconstruction
         self.fail_on = set(fail_on or ())
+        self.invalid_final_on = set(invalid_final_on or ())
         self.closed = False
 
     def generate(self, prompt, config, response_schema=None):
@@ -86,6 +87,8 @@ class FakeAdapter:
             visible_text = prompt.split("CANDIDATE-VISIBLE SCENARIO:\n", 1)[1].split("\n\nCANONICAL STAGE-1 ARTIFACT:\n", 1)[0]
             visible = json.loads(visible_text)
             text = json.dumps({"decisions": [{"decision_id": item["id"], "materially_dependent": False, "dependency_strength": "independent", "still_justified": True} for item in visible["decisions"]]})
+            if len(self.calls) in self.invalid_final_on:
+                text = "invalid final model output"
         return ModelResponse(text=text, latency_ms=1, input_tokens=2, output_tokens=1)
 
     def close(self):
@@ -184,6 +187,8 @@ class RoundBTests(unittest.TestCase):
         with self.frozen_git(), patch("dr_baselines.round_b.evaluate_discovery", wraps=__import__("dr_bench").evaluate_discovery) as evaluator:
             summary = execute(output, adapter_factory=lambda: adapter, sleep_fn=lambda _: None)
         self.assertEqual(len(adapter.calls), 96); self.assertEqual(summary["final_runs_persisted"], 72); self.assertEqual(summary["evaluations_persisted"], 72)
+        self.assertEqual(summary["final_valid_outputs"], 72); self.assertEqual(summary["final_invalid_outputs"], 0)
+        self.assertTrue(summary["scientific_outputs_complete"]); self.assertTrue(summary["screening_complete"])
         artifacts = [json.loads(x) for x in (output / "stage1_artifacts.jsonl").read_text().splitlines()]
         self.assertEqual(Counter(x["stage_id"] for x in artifacts), Counter({"RC0_GENERIC_STAGE1": 12, "SHARED_RECONSTRUCTION_STAGE1": 12}))
         runs = [json.loads(x) for x in (output / "runs.jsonl").read_text().splitlines()]
@@ -215,6 +220,26 @@ class RoundBTests(unittest.TestCase):
         failed = [x for x in runs if x["validation_status"] == "provider_error"]
         self.assertEqual(len(failed), 1); self.assertIn("isolated provider failure", failed[0]["provider_error"])
 
+    def test_one_invalid_final_is_preserved_not_retried_and_not_classifiable(self):
+        output = self.prepared(); adapter = FakeAdapter(invalid_final_on={3})
+        with self.frozen_git(): summary = execute(output, adapter_factory=lambda: adapter, sleep_fn=lambda _: None)
+        self.assertEqual(len(adapter.calls), 96)
+        self.assertEqual(summary["final_runs_persisted"], 72)
+        self.assertEqual(summary["final_valid_outputs"], 71)
+        self.assertEqual(summary["final_invalid_outputs"], 1)
+        self.assertEqual(summary["evaluations_persisted"], 71)
+        self.assertEqual(summary["provider_failures"], 0)
+        self.assertTrue(summary["infrastructure_complete"])
+        self.assertFalse(summary["scientific_outputs_complete"])
+        self.assertFalse(summary["screening_complete"])
+        self.assertEqual(summary["classification_status"], "INCOMPLETE / MODEL OUTPUT")
+        runs = [json.loads(x) for x in (output / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(sum(x["validation_status"] == "invalid" for x in runs), 1)
+        analysis = analyze(output, output.parent / "invalid-analysis")
+        self.assertEqual(analysis["classification_status"], "INCOMPLETE / MODEL OUTPUT")
+        self.assertTrue(all(value["status"] == "INCOMPLETE / MODEL OUTPUT" for value in analysis["precommitted_comparisons"].values()))
+        self.assertNotIn("INCOMPLETE / INFRASTRUCTURE", json.dumps(analysis["precommitted_comparisons"]))
+
     def test_analysis_is_offline_decision_level_and_claim_bounded(self):
         output = self.prepared(); adapter = FakeAdapter()
         with self.frozen_git(): execute(output, adapter_factory=lambda: adapter, sleep_fn=lambda _: None)
@@ -235,6 +260,7 @@ class RoundBTests(unittest.TestCase):
         self.assertEqual(classify_contrast([row], [candidate], True)["status"], "PROMISING")
         self.assertNotIn("PROVEN", json.dumps(classify_contrast([row], [candidate], True)))
         self.assertEqual(classify_contrast([], [], False)["status"], "INCOMPLETE / INFRASTRUCTURE")
+        self.assertEqual(classify_contrast([], [], False, "INCOMPLETE / MODEL OUTPUT")["status"], "INCOMPLETE / MODEL OUTPUT")
 
     def test_cli_import_and_no_mode_do_not_construct_provider(self):
         from dr_baselines.round_b import main
