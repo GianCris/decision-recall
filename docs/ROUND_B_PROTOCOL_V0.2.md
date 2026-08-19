@@ -254,6 +254,22 @@ Coverage is categorical, not relevance-based. It does not require every object
 or the "best" item. `agents`, `world`, `consequences`, and `recovery_actions`
 are optional; they may be selected only through valid terminal-string paths.
 
+`SEMANTIC_COVERAGE_INVALID` is the distinct RC0 Stage-1 model/mechanism
+failure category for an artifact in which every grounded item that is present
+is individually valid and source-grounded, but one or more mandatory
+semantic-content categories above are missing. This includes absence of a
+qualifying knowledge-before statement, `/change/statement`, a qualifying
+decision statement, or—when transmissions are non-empty—a qualifying
+transmission content string.
+
+A valid optional identifier/reference grounded item is not
+`SEMANTIC_REFERENCE_INVALID` merely because it contributes zero toward
+mandatory semantic coverage. If required semantic categories remain missing,
+the artifact is `SEMANTIC_COVERAGE_INVALID`, not `SCHEMA_INVALID`,
+`SEMANTIC_REFERENCE_INVALID`, or `PROVIDER_DELIVERY_FAILURE`. This is
+model/mechanism behavior and is persisted without retry, repair, regeneration,
+or imputation.
+
 ### 6.4 Prohibited semantics
 
 RC0 cannot explicitly represent change-to-prior-knowledge mappings,
@@ -368,12 +384,33 @@ six-call order above is unchanged. No Stage-2 call is scheduled.
 `PASS` requires all six planned Stage-1 observations to return model responses
 and all six model payloads to validate under their respective v0.2 contracts.
 
-An invalid model payload is preserved as model/mechanism behavior, is never
-repaired, regenerated, or retried as reasoning, and yields `SANITY FAIL`.
-A provider delivery failure after the frozen transport policy is exhausted
-yields `SANITY INCOMPLETE / INFRASTRUCTURE`. Any result other than `PASS`
-stops the process: no full screening, automatic prompt/schema/validator
-change, rerun, or new experiment follows.
+Whenever the sanity experiment itself has not been interrupted, all six
+positions in the frozen schedule are attempted. An invalid Stage-1 model
+payload is persisted truthfully as model/mechanism behavior, receives no
+retry, regeneration, repair, or imputation, and makes `PASS` impossible; it
+does not skip later frozen positions. A terminal provider-delivery failure is
+persisted truthfully, is neither replaced nor retried beyond the frozen
+delivery policy, and also makes `PASS` impossible; it does not skip later
+frozen positions. An operator or systemic interruption aborts the experiment.
+
+After the attempted schedule, aggregate status uses this frozen precedence:
+
+1. operator/system abort: `ABORTED`;
+2. otherwise, one or more model/mechanism-invalid Stage-1 payloads—including
+   `SCHEMA_INVALID`, `SEMANTIC_REFERENCE_INVALID`,
+   `SEMANTIC_COVERAGE_INVALID`, or `FORBIDDEN_SEMANTIC_CONTENT`:
+   `FAIL / INTERFACE`;
+3. otherwise, one or more terminal provider-delivery failures:
+   `INCOMPLETE / INFRASTRUCTURE`;
+4. otherwise, all six observations completed with valid payloads: `PASS`.
+
+In a mixed model/mechanism-invalid plus provider-delivery-failure execution,
+both counters and facts are preserved and the aggregate status is
+`FAIL / INTERFACE`. The provider failure is neither erased nor reclassified;
+no combined status is created.
+
+Any aggregate result other than `PASS` prevents full screening: no automatic
+prompt/schema/validator change, rerun, or new experiment follows.
 
 Sanity output is diagnostic interface evidence only. It cannot be reused in
 the full screening, fill a full-screening slot, enter a performance aggregate,
