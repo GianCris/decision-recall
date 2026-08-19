@@ -82,8 +82,17 @@ Only after the model payload passes its frozen validator does the harness:
 4. construct the envelope using the stage's frozen payload-schema version, the
    planned scenario and stage identifiers, and that digest.
 
-Stage 2 receives only the validated canonical model payload together with its
-harness-owned envelope. It never receives raw Stage-1 output.
+The envelope is persisted out-of-band and linked to the validated canonical
+model payload for auditability, integrity, and artifact linkage only. Before a
+dependent Stage-2 call, the harness may verify out-of-band that
+`SHA256(canonical_payload_bytes) == envelope.artifact_sha256`.
+
+Stage 2 receives exactly the original candidate-visible input plus the
+validated canonical Stage-1 model payload. It never receives raw Stage-1
+output or any `ArtifactEnvelope` field. In particular,
+`artifact_schema_version`, the envelope's `scenario_id`, `stage_id`, and
+`artifact_sha256` are not model-visible. This applies identically to RC0,
+RB1, RB2, and RB3 Stage 2.
 
 ## 4. Frozen Stage1VisibleProjection
 
@@ -216,14 +225,30 @@ model-generated organization signal.
 
 ### 6.3 Categorical minimum coverage
 
-For every scenario, at least one valid grounded item must resolve beneath each
-of these top-level projection members:
+The general source-path rule in Section 6.1 remains unchanged: optional
+grounded items may reference any otherwise-valid terminal candidate-visible
+string. Mandatory categorical coverage, however, can be satisfied only by
+these exact semantic-content path classes, where `<index>` is a canonical
+zero-based array index under Section 6.1:
 
-- `/knowledge_before`: at least one;
-- `/change`: at least one;
-- `/decisions`: at least one; and
-- `/transmissions`: at least one only when the projection's `transmissions`
-  array is non-empty.
+- knowledge-before coverage: at least one
+  `/knowledge_before/<index>/statement`;
+- change coverage: the grounded item `/change/statement` (exactly one item can
+  use this unique path under the uniqueness rule);
+- decision coverage: at least one `/decisions/<index>/statement`; and
+- transmission coverage: at least one `/transmissions/<index>/content` only
+  when the projection's `transmissions` array is non-empty.
+
+These four are the only path classes that count toward mandatory RC0
+categorical coverage in v0.2. Identifier, actor, holder, agent, and other
+structural/reference paths—including `/knowledge_before/<index>/id`,
+`/knowledge_before/<index>/holder`, `/change/id`,
+`/decisions/<index>/id`, `/decisions/<index>/agent_id`,
+`/transmissions/<index>/id`, `/transmissions/<index>/from_agent`, and
+`/transmissions/<index>/to_agent`—may remain optional grounded items if they
+otherwise satisfy the general source-path contract, but contribute zero
+toward mandatory categorical coverage. Analogous identifier/reference fields
+also contribute zero.
 
 Coverage is categorical, not relevance-based. It does not require every object
 or the "best" item. `agents`, `world`, `consequences`, and `recovery_actions`
@@ -238,13 +263,14 @@ sufficiency, survivability, still-justified judgments, reopening, alternative
 support, confidence, or ranking. Any semantic value it carries must be an
 exact complete candidate-visible source string referenced by `source_path`.
 
-RC0 Stage 2 receives the original frozen implicit candidate-visible input plus
-the canonical `NeutralGroundedContextPayload` and its harness-owned envelope.
+RC0 Stage 2 receives exactly the original frozen implicit candidate-visible
+input plus the canonical `NeutralGroundedContextPayload`. Its harness-owned
+envelope remains persisted and linked out-of-band and is not model-visible.
 
 ### 6.5 Frozen RC0 Stage-1 instruction
 
 Version: `rc0-stage1-neutral-grounded-context-v0.2`
-SHA-256: `4f6609f3de823babe7d0631fdd25709a0d5e4bb5059f47df9899cf39f4a01b4c`
+SHA-256: `e0915fb6ea21d3f6e5dc163e5e10514ab1588d954f599fdb783929c0c4c25f48`
 
 The instruction is UTF-8 text exactly between the code fences, without a
 trailing newline for hashing:
@@ -257,9 +283,10 @@ NeutralGroundedContextPayload.
 Select candidate-visible textual elements and return each selected complete
 source string together with its exact JSON Pointer source_path.
 
-Include at least one grounded item from knowledge_before, change, and
-decisions. If transmissions is non-empty, include at least one grounded item
-from transmissions.
+Include at least one knowledge_before statement, the change statement, and at
+least one decision statement. If transmissions is non-empty, include at least
+one transmission content string, using the exact source-path classes required
+by the frozen schema.
 
 Do not paraphrase, summarize, shorten, rewrite, interpret, or add text.
 source_text must exactly equal the complete string resolved by source_path.
@@ -330,9 +357,11 @@ PREPARE freezes this exact schedule:
 | 5 | `dev-006` | RC0 Neutral Grounded Context |
 | 6 | `dev-006` | Reconstruction |
 
-This contains exactly three calls per Stage-1 condition, alternates conditions
-across all six positions, and reverses within-scenario order for S2. No Stage-2
-call is scheduled.
+This contains exactly three calls per Stage-1 condition, and every sanity
+scenario contains both conditions. Across the three scenarios, the
+within-scenario first position is balanced as closely as possible: RC0 is
+first in two scenarios and Reconstruction is first in one. The explicit
+six-call order above is unchanged. No Stage-2 call is scheduled.
 
 ### 8.3 PASS and failure policy
 
@@ -397,7 +426,7 @@ sealed-holdout access.
 ## 11. Freeze checklist for later implementation
 
 - [ ] Administrative fields are absent from and forbidden in both model payload schemas.
-- [ ] The harness creates `ArtifactEnvelope` only after payload validation.
+- [ ] The harness creates `ArtifactEnvelope` only after payload validation and keeps it out-of-band from every Stage-2 model input.
 - [ ] Artifact hashing uses the exact canonical serialization in Section 3.
 - [ ] Reconstruction instruction and scientific payload semantics remain unchanged.
 - [ ] RC0 contains only exact terminal strings referenced by valid JSON Pointers.
