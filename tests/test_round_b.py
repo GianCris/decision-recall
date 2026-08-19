@@ -13,14 +13,15 @@ from dr_baselines.models import ModelResponse
 from dr_baselines.round_b import (
     ALTERNATIVE_SUPPORT_STAGE2_INSTRUCTION, DECISION_SUPPORT_JSON_SCHEMA,
     DECISION_SUPPORT_SCHEMA_VERSION, DEV_SCENARIOS, FINAL_CONDITIONS,
-    GENERIC_CONTEXT_JSON_SCHEMA, GENERIC_CONTEXT_SCHEMA_VERSION,
+    ARTIFACT_ENVELOPE_VERSION, NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA,
+    NEUTRAL_GROUNDED_CONTEXT_SCHEMA_VERSION,
     INTERMEDIATE_STAGES, PROJECTION_FIELDS, PROMPT_HASHES, PROTOCOL_SHA256,
-    RC0_STAGE1_GENERIC_ORGANIZATION_INSTRUCTION, RECONSTRUCTION_STAGE1_INSTRUCTION,
+    RC0_STAGE1_NEUTRAL_GROUNDED_CONTEXT_INSTRUCTION, RECONSTRUCTION_STAGE1_INSTRUCTION,
     RoundBError, SURVIVABILITY_STAGE2_INSTRUCTION, analyze, build_execution_plan,
-    build_stage1_projection, build_stage1_prompt, build_stage2_prompt,
+    build_artifact_envelope, build_stage1_projection, build_stage1_prompt, build_stage2_prompt,
     classify_contrast, execute, final_position_counts, prepare, projection_bytes,
     protocol_sha256, schema_sha256, stage2_instruction, validate_decision_support,
-    validate_frozen_constants, validate_generic_context, validate_plan,
+    validate_frozen_constants, validate_neutral_grounded_context, validate_plan,
 )
 
 
@@ -37,24 +38,18 @@ def projection(scenario_id="dev-001"):
 
 
 def generic_value(source):
-    return {
-        "schema_version": GENERIC_CONTEXT_SCHEMA_VERSION,
-        "scenario_id": source["scenario_id"],
-        "agents": copy.deepcopy(source["agents"]),
-        "knowledge_before": copy.deepcopy(source["knowledge_before"]),
-        "change": copy.deepcopy(source["change"]),
-        "transmissions": copy.deepcopy(source["transmissions"]),
-        "decisions": copy.deepcopy(source["decisions"]),
-        "world": copy.deepcopy(source["world"]),
-        "consequences": copy.deepcopy(source["consequences"]),
-        "recovery_actions": copy.deepcopy(source["recovery_actions"]),
-    }
+    items = [
+        {"source_path": "/knowledge_before/0/statement", "source_text": source["knowledge_before"][0]["statement"]},
+        {"source_path": "/change/statement", "source_text": source["change"]["statement"]},
+        {"source_path": "/decisions/0/statement", "source_text": source["decisions"][0]["statement"]},
+    ]
+    if source["transmissions"]:
+        items.append({"source_path": "/transmissions/0/content", "source_text": source["transmissions"][0]["content"]})
+    return {"grounded_items": items}
 
 
 def support_value(source):
     return {
-        "schema_version": DECISION_SUPPORT_SCHEMA_VERSION,
-        "scenario_id": source["scenario_id"],
         "change_alignment": {"change_ref": source["change"]["id"], "candidate_prior_knowledge_refs": []},
         "decision_connections": [{"decision_id": item["id"], "candidate_knowledge_refs": [], "basis_trace_refs": []} for item in source["decisions"]],
     }
@@ -74,7 +69,7 @@ class FakeAdapter:
         self.calls.append((prompt, config, response_schema))
         if len(self.calls) in self.fail_on:
             raise RuntimeError("isolated provider failure")
-        if response_schema is GENERIC_CONTEXT_JSON_SCHEMA:
+        if response_schema is NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA:
             source = json.loads(prompt.split("STAGE1VISIBLEPROJECTION:\n", 1)[1])
             text = json.dumps(generic_value(source))
         elif response_schema is DECISION_SUPPORT_JSON_SCHEMA:
@@ -110,7 +105,7 @@ class RoundBTests(unittest.TestCase):
 
     def test_protocol_and_prompt_hashes_are_frozen(self):
         self.assertEqual(protocol_sha256(), PROTOCOL_SHA256)
-        blocks = {"rc0_stage1": RC0_STAGE1_GENERIC_ORGANIZATION_INSTRUCTION, "reconstruction_stage1": RECONSTRUCTION_STAGE1_INSTRUCTION, "survivability_stage2": SURVIVABILITY_STAGE2_INSTRUCTION, "alternative_support_stage2": ALTERNATIVE_SUPPORT_STAGE2_INSTRUCTION}
+        blocks = {"rc0_stage1": RC0_STAGE1_NEUTRAL_GROUNDED_CONTEXT_INSTRUCTION, "reconstruction_stage1": RECONSTRUCTION_STAGE1_INSTRUCTION, "survivability_stage2": SURVIVABILITY_STAGE2_INSTRUCTION, "alternative_support_stage2": ALTERNATIVE_SUPPORT_STAGE2_INSTRUCTION}
         self.assertEqual({key: hashlib.sha256(value.encode()).hexdigest() for key, value in blocks.items()}, PROMPT_HASHES)
         validate_frozen_constants()
 
@@ -124,18 +119,16 @@ class RoundBTests(unittest.TestCase):
         for excluded in ("schema_version", "split", "phase", "discovery_condition", "complexity", "title", "domain", "private"):
             self.assertNotIn(excluded, value)
 
-    def test_generic_record_is_complete_exact_and_canonical(self):
+    def test_neutral_context_is_grounded_covered_and_canonical(self):
         source = projection(); value = generic_value(source)
-        value["agents"].reverse(); value["knowledge_before"].reverse()
-        canonical, encoded, digest = validate_generic_context(json.dumps(value), source)
-        self.assertEqual([x["id"] for x in canonical["agents"]], sorted(x["id"] for x in source["agents"]))
+        value["grounded_items"].reverse()
+        canonical, encoded, digest = validate_neutral_grounded_context(json.dumps(value), source)
+        self.assertEqual([x["source_path"] for x in canonical["grounded_items"]], sorted(x["source_path"] for x in value["grounded_items"]))
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), digest)
-        changed = generic_value(source); changed["decisions"][0]["statement"] += " necessary support material critical"
-        with self.assertRaisesRegex(ValueError, "changed or omitted"): validate_generic_context(json.dumps(changed), source)
-        sensitive = copy.deepcopy(source); sensitive["decisions"][0]["statement"] = "Necessary material support remains critical."
-        self.assertTrue(validate_generic_context(json.dumps(generic_value(sensitive)), sensitive)[0])
-        omitted = generic_value(source); omitted["agents"].pop()
-        with self.assertRaises(ValueError): validate_generic_context(json.dumps(omitted), source)
+        changed = generic_value(source); changed["grounded_items"][0]["source_text"] += " changed"
+        with self.assertRaisesRegex(ValueError, "exactly equal"): validate_neutral_grounded_context(json.dumps(changed), source)
+        omitted = generic_value(source); omitted["grounded_items"] = [x for x in omitted["grounded_items"] if x["source_path"] != "/change/statement"]
+        with self.assertRaisesRegex(ValueError, "SEMANTIC_COVERAGE|missing mandatory"): validate_neutral_grounded_context(json.dumps(omitted), source)
 
     def test_support_record_empty_sets_valid_and_refs_strict(self):
         source = projection(); value = support_value(source); value["decision_connections"].reverse()
@@ -178,7 +171,8 @@ class RoundBTests(unittest.TestCase):
         with self.frozen_git(): manifest = prepare(output)
         self.assertEqual(manifest["conceptual_model_calls"], 96); self.assertEqual(manifest["possible_final_outputs"], 72)
         self.assertEqual(manifest["round_b_protocol_sha256"], PROTOCOL_SHA256)
-        self.assertEqual(manifest["generic_context_schema_sha256"], schema_sha256(GENERIC_CONTEXT_JSON_SCHEMA))
+        self.assertEqual(manifest["neutral_grounded_context_schema_sha256"], schema_sha256(NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA))
+        self.assertEqual(manifest["artifact_envelope_version"], ARTIFACT_ENVELOPE_VERSION)
         self.assertEqual(manifest["decision_support_schema_sha256"], schema_sha256(DECISION_SUPPORT_JSON_SCHEMA))
         self.assertFalse(manifest["confirmation_authorized"])
 

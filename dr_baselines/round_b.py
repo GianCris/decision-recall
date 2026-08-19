@@ -30,11 +30,11 @@ from .output import (
 from .runner import with_structured_output_metadata
 
 
-EXPERIMENT_VERSION = "round-b-screening-v0.1"
-PROTOCOL_VERSION = "round-b-protocol-v0.1"
-PROTOCOL_COMMIT = "7269efa8d338a8ebba96deb4e5b515091007cd48"
-PROTOCOL_SHA256 = "7a7e45cc5daaac3742256dc173e31b68dca8f23a810b13aa4b27da7c9c21812b"
-PROTOCOL_PATH = Path("docs/ROUND_B_PROTOCOL_V0.1.md")
+EXPERIMENT_VERSION = "round-b-screening-v0.2"
+PROTOCOL_VERSION = "round-b-protocol-v0.2"
+PROTOCOL_COMMIT = "bfa262a8b7cd4ee30f17e3445e39c14b7f9ad916"
+PROTOCOL_SHA256 = "eba2cd3d3c848ca43a0c26e1eb7c23e1c5be3af6a44a218a2018bb4019c1f335"
+PROTOCOL_PATH = Path("docs/ROUND_B_PROTOCOL_V0.2.md")
 DEV_SCENARIOS = tuple(f"dev-{number:03d}" for number in range(1, 13))
 FINAL_CONDITIONS = ("RB0", "RC0", "RR1", "RB1", "RB2", "RB3")
 INTERMEDIATE_STAGES = ("RC0_GENERIC_STAGE1", "SHARED_RECONSTRUCTION_STAGE1")
@@ -44,26 +44,31 @@ PLAN_FILENAME = "execution_plan.json"
 MANIFEST_FILENAME = "experiment_manifest.json"
 DELIVERY_FILENAME = "delivery_attempts.jsonl"
 
-RC0_STAGE1_GENERIC_ORGANIZATION_INSTRUCTION = """GENERIC CONTEXT ORGANIZATION:
-Using only the provided Stage1VisibleProjection, reproduce its operational
-content in the required GenericContextRecord schema.
+RC0_STAGE1_NEUTRAL_GROUNDED_CONTEXT_INSTRUCTION = """NEUTRAL GROUNDED CONTEXT:
+Using only the provided Stage1VisibleProjection, produce the required
+NeutralGroundedContextPayload.
 
-Preserve all visible objects and their candidate-visible fields required by
-that schema.
+Select candidate-visible textual elements and return each selected complete
+source string together with its exact JSON Pointer source_path.
 
-Do not omit, select, rank, prioritize, summarize away, repair, reinterpret,
-infer, or add information.
+Include at least one knowledge_before statement, the change statement, and at
+least one decision statement. If transmissions is non-empty, include at least
+one transmission content string, using the exact source-path classes required
+by the frozen schema.
 
-Do not create knowledge/evidence-to-decision mappings.
+Do not paraphrase, summarize, shorten, rewrite, interpret, or add text.
+source_text must exactly equal the complete string resolved by source_path.
 
-Do not infer change-to-prior-knowledge mappings beyond structure already
-mechanically present in the visible input.
+Do not construct or encode change-to-prior-knowledge mappings,
+knowledge/evidence-to-decision mappings, decision-specific evidence groups,
+provenance, reliance, materiality, dependency strength, necessity,
+sufficiency, survivability, justification, reopening, or alternative support.
 
-Do not make judgments about relevance, reliance, material dependence,
-necessity, sufficiency, survivability, justification, reopening, or
-alternative support.
+Do not rank, score, weight, label relevance, or assign confidence to grounded
+items.
 
-This task is organization only."""
+Return only the fields required by the frozen NeutralGroundedContextPayload
+schema."""
 
 RECONSTRUCTION_STAGE1_INSTRUCTION = """DECISION SUPPORT RECONSTRUCTION:
 Using only the provided Stage1VisibleProjection, produce the required
@@ -114,7 +119,7 @@ remaining reason or evidence source that would be sufficient to justify the
 same decision without relying on the changed premise."""
 
 PROMPT_HASHES = {
-    "rc0_stage1": "fd4063e278126464c43989cb634467bb201612f55b4ba5c80fcf3ff413fb8777",
+    "rc0_stage1": "e0915fb6ea21d3f6e5dc163e5e10514ab1588d954f599fdb783929c0c4c25f48",
     "reconstruction_stage1": "b691855c1d3e6240daa45b5174e66c7a18286b9c943abe034dff7b33540cd716",
     "survivability_stage2": "18c946ff305a079cc1de83baf8e01a192717fa21942bd06530573d1ec6666c2f",
     "alternative_support_stage2": "ffe28d4ba2459442f04fdac8dc0406dff8c64f093f176ee719946274170eab9e",
@@ -125,28 +130,25 @@ PROJECTION_FIELDS = (
     "decisions", "world", "consequences", "recovery_actions",
 )
 
-GENERIC_CONTEXT_SCHEMA_VERSION = "generic-context-record-v0.1"
-DECISION_SUPPORT_SCHEMA_VERSION = "decision-support-record-v0.1"
+ARTIFACT_ENVELOPE_VERSION = "artifact-envelope-v0.2"
+NEUTRAL_GROUNDED_CONTEXT_SCHEMA_VERSION = "neutral-grounded-context-payload-v0.2"
+DECISION_SUPPORT_SCHEMA_VERSION = "decision-support-payload-v0.2"
 
-GENERIC_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
+NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "scenario_id", "agents", "knowledge_before", "change", "transmissions", "decisions", "world", "consequences", "recovery_actions"],
+    "required": ["grounded_items"],
     "properties": {
-        "schema_version": {"const": GENERIC_CONTEXT_SCHEMA_VERSION},
-        "scenario_id": {"type": "string"}, "agents": {"type": "array"},
-        "knowledge_before": {"type": "array"}, "change": {"type": "object"},
-        "transmissions": {"type": "array"}, "decisions": {"type": "array"},
-        "world": {"type": "object"}, "consequences": {"type": "array"},
-        "recovery_actions": {"type": "array"},
+        "grounded_items": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+            "required": ["source_path", "source_text"], "properties": {
+                "source_path": {"type": "string", "minLength": 1}, "source_text": {"type": "string", "minLength": 1}
+            }}},
     },
 }
 
 DECISION_SUPPORT_JSON_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
-    "required": ["schema_version", "scenario_id", "change_alignment", "decision_connections"],
+    "required": ["change_alignment", "decision_connections"],
     "properties": {
-        "schema_version": {"const": DECISION_SUPPORT_SCHEMA_VERSION},
-        "scenario_id": {"type": "string"},
         "change_alignment": {
             "type": "object", "additionalProperties": False,
             "required": ["change_ref", "candidate_prior_knowledge_refs"],
@@ -197,9 +199,23 @@ def schema_sha256(schema: dict[str, Any]) -> str:
     return hashlib.sha256(_compact_json(schema).encode("utf-8")).hexdigest()
 
 
+def build_artifact_envelope(scenario_id: str, stage_id: str, canonical_bytes: bytes) -> dict[str, str]:
+    return {
+        "artifact_schema_version": ARTIFACT_ENVELOPE_VERSION,
+        "scenario_id": scenario_id,
+        "stage_id": stage_id,
+        "artifact_sha256": hashlib.sha256(canonical_bytes).hexdigest(),
+    }
+
+
+def verify_artifact_envelope(envelope: dict[str, str], canonical_bytes: bytes) -> None:
+    if hashlib.sha256(canonical_bytes).hexdigest() != envelope.get("artifact_sha256"):
+        raise RoundBError("canonical Stage-1 payload does not match its out-of-band envelope")
+
+
 def validate_frozen_constants() -> None:
     blocks = {
-        "rc0_stage1": RC0_STAGE1_GENERIC_ORGANIZATION_INSTRUCTION,
+        "rc0_stage1": RC0_STAGE1_NEUTRAL_GROUNDED_CONTEXT_INSTRUCTION,
         "reconstruction_stage1": RECONSTRUCTION_STAGE1_INSTRUCTION,
         "survivability_stage2": SURVIVABILITY_STAGE2_INSTRUCTION,
         "alternative_support_stage2": ALTERNATIVE_SUPPORT_STAGE2_INSTRUCTION,
@@ -242,50 +258,73 @@ def _unique_strings(value: Any, label: str) -> list[str]:
     return sorted(value)
 
 
-def _sort_by_id(values: Any, label: str) -> list[dict[str, Any]]:
-    if not isinstance(values, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in values):
-        raise IntermediateValidationError("SCHEMA_INVALID", f"{label} must contain objects with IDs")
-    if len({item["id"] for item in values}) != len(values):
-        raise IntermediateValidationError("SCHEMA_INVALID", f"{label} contains duplicate IDs")
-    return sorted(values, key=lambda item: item["id"])
+def _resolve_json_pointer(projection: dict[str, Any], pointer: str) -> str:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path is not a frozen RFC 6901 pointer")
+    current: Any = projection
+    for raw in pointer.split("/")[1:]:
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if "~" in raw.replace("~0", "").replace("~1", ""):
+            raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path contains invalid escape")
+        if isinstance(current, dict):
+            if token not in current:
+                raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path does not resolve")
+            current = current[token]
+        elif isinstance(current, list):
+            if token == "-" or not token.isdigit() or (len(token) > 1 and token.startswith("0")):
+                raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path has invalid array index")
+            index = int(token)
+            if index >= len(current):
+                raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path does not resolve")
+            current = current[index]
+        else:
+            raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path traverses a terminal value")
+    if not isinstance(current, str):
+        raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_path must resolve to a terminal string")
+    return current
 
 
-def _canonical_source_generic(projection: dict[str, Any]) -> dict[str, Any]:
-    result = {
-        "schema_version": GENERIC_CONTEXT_SCHEMA_VERSION,
-        "scenario_id": projection["scenario_id"],
-        "agents": _sort_by_id(projection["agents"], "agents"),
-        "knowledge_before": _sort_by_id(projection["knowledge_before"], "knowledge_before"),
-        "change": projection["change"],
-        "transmissions": list(projection["transmissions"]),
-        "decisions": list(projection["decisions"]),
-        "world": projection["world"],
-        "consequences": _sort_by_id(projection["consequences"], "consequences"),
-        "recovery_actions": _sort_by_id(projection["recovery_actions"], "recovery_actions"),
-    }
-    for item in result["knowledge_before"]:
-        item["visibility"] = sorted(item["visibility"])
-    return result
-
-
-def validate_generic_context(raw_text: str, projection: dict[str, Any]) -> tuple[dict[str, Any], bytes, str]:
+def validate_neutral_grounded_context(raw_text: str, projection: dict[str, Any]) -> tuple[dict[str, Any], bytes, str]:
     try:
         value = json.loads(raw_text)
     except (json.JSONDecodeError, TypeError) as exc:
         raise IntermediateValidationError("SCHEMA_INVALID", str(exc)) from exc
-    keys = set(GENERIC_CONTEXT_JSON_SCHEMA["required"])
-    _require_exact_keys(value, keys, "GenericContextRecord")
-    if value.get("schema_version") != GENERIC_CONTEXT_SCHEMA_VERSION or value.get("scenario_id") != projection["scenario_id"]:
-        raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "generic record version or scenario reference is invalid")
-    try:
-        canonical = _canonical_source_generic(value | {})
-    except (KeyError, TypeError) as exc:
-        raise IntermediateValidationError("SCHEMA_INVALID", str(exc)) from exc
-    expected = _canonical_source_generic(projection)
-    # Equality rejects omission, paraphrase, enrichment, and newly introduced semantic text,
-    # while permitting source-visible language verbatim.
-    if canonical != expected:
-        raise IntermediateValidationError("FORBIDDEN_SEMANTIC_CONTENT", "generic record changed or omitted candidate-visible content")
+    if isinstance(value, dict) and set(value) & {
+        "change_to_knowledge", "change_alignment", "knowledge_to_decision",
+        "decision_connections", "decision_support", "provenance", "reliance",
+        "materially_dependent", "dependency_strength", "necessity", "sufficiency",
+        "survivability", "still_justified", "should_reopen", "must_reopen",
+        "alternative_support", "alternative_support_candidates", "confidence",
+        "probability", "ranking", "private_dependency_path", "oracle_labels",
+    }:
+        raise IntermediateValidationError("FORBIDDEN_SEMANTIC_CONTENT", "RC0 payload contains prohibited specialized semantics")
+    _require_exact_keys(value, {"grounded_items"}, "NeutralGroundedContextPayload")
+    items = value["grounded_items"]
+    if not isinstance(items, list):
+        raise IntermediateValidationError("SCHEMA_INVALID", "grounded_items must be an array")
+    canonical_items = []
+    for item in items:
+        item = _require_exact_keys(item, {"source_path", "source_text"}, "grounded_item")
+        if not isinstance(item["source_path"], str) or not isinstance(item["source_text"], str) or not item["source_path"] or not item["source_text"]:
+            raise IntermediateValidationError("SCHEMA_INVALID", "grounded item values must be non-empty strings")
+        resolved = _resolve_json_pointer(projection, item["source_path"])
+        if resolved != item["source_text"]:
+            raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "source_text does not exactly equal resolved source string")
+        canonical_items.append({"source_path": item["source_path"], "source_text": item["source_text"]})
+    paths = [item["source_path"] for item in canonical_items]
+    if len(paths) != len(set(paths)):
+        raise IntermediateValidationError("SCHEMA_INVALID", "grounded_items contains duplicate source_path values")
+    import re
+    coverage = {
+        "knowledge_before": any(re.fullmatch(r"/knowledge_before/(0|[1-9][0-9]*)/statement", path) for path in paths),
+        "change": "/change/statement" in paths,
+        "decisions": any(re.fullmatch(r"/decisions/(0|[1-9][0-9]*)/statement", path) for path in paths),
+        "transmissions": not projection["transmissions"] or any(re.fullmatch(r"/transmissions/(0|[1-9][0-9]*)/content", path) for path in paths),
+    }
+    if not all(coverage.values()):
+        missing = ", ".join(key for key, present in coverage.items() if not present)
+        raise IntermediateValidationError("SEMANTIC_COVERAGE_INVALID", f"missing mandatory semantic coverage: {missing}")
+    canonical = {"grounded_items": sorted(canonical_items, key=lambda item: item["source_path"])}
     encoded = _canonical_json(canonical)
     return canonical, encoded, hashlib.sha256(encoded).hexdigest()
 
@@ -295,9 +334,7 @@ def validate_decision_support(raw_text: str, projection: dict[str, Any]) -> tupl
         value = json.loads(raw_text)
     except (json.JSONDecodeError, TypeError) as exc:
         raise IntermediateValidationError("SCHEMA_INVALID", str(exc)) from exc
-    _require_exact_keys(value, {"schema_version", "scenario_id", "change_alignment", "decision_connections"}, "DecisionSupportRecord")
-    if value.get("schema_version") != DECISION_SUPPORT_SCHEMA_VERSION or value.get("scenario_id") != projection["scenario_id"]:
-        raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "support record version or scenario reference is invalid")
+    _require_exact_keys(value, {"change_alignment", "decision_connections"}, "DecisionSupportPayload")
     alignment = _require_exact_keys(value["change_alignment"], {"change_ref", "candidate_prior_knowledge_refs"}, "change_alignment")
     if alignment["change_ref"] != projection["change"]["id"]:
         raise IntermediateValidationError("SEMANTIC_REFERENCE_INVALID", "change_ref does not equal visible change.id")
@@ -321,7 +358,6 @@ def validate_decision_support(raw_text: str, projection: dict[str, Any]) -> tupl
     if len(canonical_connections) != len(decision_ids) or {item["decision_id"] for item in canonical_connections} != decision_ids:
         raise IntermediateValidationError("SCHEMA_INVALID", "decision connections must cover every decision exactly once")
     canonical = {
-        "schema_version": DECISION_SUPPORT_SCHEMA_VERSION, "scenario_id": projection["scenario_id"],
         "change_alignment": {"change_ref": alignment["change_ref"], "candidate_prior_knowledge_refs": prior},
         "decision_connections": sorted(canonical_connections, key=lambda item: item["decision_id"]),
     }
@@ -330,7 +366,7 @@ def validate_decision_support(raw_text: str, projection: dict[str, Any]) -> tupl
 
 
 def build_stage1_prompt(stage_id: str, projection: dict[str, Any]) -> str:
-    instruction = RC0_STAGE1_GENERIC_ORGANIZATION_INSTRUCTION if stage_id == "RC0_GENERIC_STAGE1" else RECONSTRUCTION_STAGE1_INSTRUCTION
+    instruction = RC0_STAGE1_NEUTRAL_GROUNDED_CONTEXT_INSTRUCTION if stage_id == "RC0_GENERIC_STAGE1" else RECONSTRUCTION_STAGE1_INSTRUCTION
     if stage_id not in INTERMEDIATE_STAGES:
         raise RoundBError("unknown Stage-1 operation")
     return instruction + "\n\nSTAGE1VISIBLEPROJECTION:\n" + projection_bytes(projection).decode("utf-8").rstrip("\n")
@@ -360,7 +396,7 @@ def build_stage2_prompt(condition_id: str, visible: dict[str, Any], artifact_byt
 STAGE_SPECS = {
     "RB0_FINAL": ("RB0", "implicit", None, True, "discovery-response-v0.1"),
     "RR1_FINAL": ("RR1", "structured", None, True, "discovery-response-v0.1"),
-    "RC0_GENERIC_STAGE1": ("RC0", "implicit", None, False, GENERIC_CONTEXT_SCHEMA_VERSION),
+    "RC0_GENERIC_STAGE1": ("RC0", "implicit", None, False, NEUTRAL_GROUNDED_CONTEXT_SCHEMA_VERSION),
     "RC0_STAGE2": ("RC0", "implicit", "RC0_GENERIC_STAGE1", True, "discovery-response-v0.1"),
     "SHARED_RECONSTRUCTION_STAGE1": ("SHARED_RECONSTRUCTION", "implicit", None, False, DECISION_SUPPORT_SCHEMA_VERSION),
     "RB1_STAGE2": ("RB1", "implicit", "SHARED_RECONSTRUCTION_STAGE1", True, "discovery-response-v0.1"),
@@ -447,6 +483,7 @@ def _config() -> ExperimentConfig:
 def _manifest(git_sha: str, branch: str, plan_sha: str, created_at: str) -> dict[str, Any]:
     projection_definition = {"top_level_fields": list(PROJECTION_FIELDS), "source": "frozen implicit candidate view", "scenario_id_source": "id"}
     return {
+        "manifest_type": "round-b-screening-manifest-v0.2",
         "experiment_version": EXPERIMENT_VERSION, "protocol_version": PROTOCOL_VERSION,
         "round_b_protocol_sha256": protocol_sha256(), "source_protocol_commit": PROTOCOL_COMMIT,
         "git_commit_sha": git_sha, "branch": branch, "created_at_utc": created_at,
@@ -457,11 +494,12 @@ def _manifest(git_sha: str, branch: str, plan_sha: str, created_at: str) -> dict
         "final_conditions": list(FINAL_CONDITIONS), "intermediate_stages": list(INTERMEDIATE_STAGES),
         "stage1_visible_projection": projection_definition,
         "stage1_visible_projection_definition_sha256": hashlib.sha256(_canonical_json(projection_definition)).hexdigest(),
-        "generic_context_schema_version": GENERIC_CONTEXT_SCHEMA_VERSION,
-        "generic_context_schema_sha256": schema_sha256(GENERIC_CONTEXT_JSON_SCHEMA),
+        "artifact_envelope_version": ARTIFACT_ENVELOPE_VERSION,
+        "neutral_grounded_context_schema_version": NEUTRAL_GROUNDED_CONTEXT_SCHEMA_VERSION,
+        "neutral_grounded_context_schema_sha256": schema_sha256(NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA),
         "decision_support_schema_version": DECISION_SUPPORT_SCHEMA_VERSION,
         "decision_support_schema_sha256": schema_sha256(DECISION_SUPPORT_JSON_SCHEMA),
-        "prompt_versions": {"rc0_stage1": "rc0-stage1-generic-organization-v0.1", "reconstruction_stage1": "reconstruction-stage1-v0.1", "survivability_stage2": "survivability-stage2-v0.1", "alternative_support_stage2": "alternative-support-stage2-v0.1"},
+        "prompt_versions": {"rc0_stage1": "rc0-stage1-neutral-grounded-context-v0.2", "reconstruction_stage1": "reconstruction-stage1-v0.1", "survivability_stage2": "survivability-stage2-v0.1", "alternative_support_stage2": "alternative-support-stage2-v0.1"},
         "prompt_hashes": PROMPT_HASHES,
         "base_prompt_sha256": _sha_text(BASE_TASK_PROMPT),
         "discovery_schema_version": DISCOVERY_RESPONSE_SCHEMA_VERSION,
@@ -492,6 +530,8 @@ def prepare(output_dir: Path) -> dict[str, Any]:
 def _load_prepared(output_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not output_dir.is_dir():
         raise RoundBError("prepared directory does not exist")
+    if (output_dir / "sanity_manifest.json").exists():
+        raise RoundBError("Stage-1 sanity manifest cannot be used for full screening")
     if any((output_dir / name).exists() for name in (DELIVERY_FILENAME, "stage1_raw.jsonl", "stage1_artifacts.jsonl", "terminal_states.jsonl", "runs.jsonl", "evaluations.jsonl", "summary.json")):
         raise RoundBError("prepared directory already contains execution artifacts; resume is not authorized")
     plan_bytes = (output_dir / PLAN_FILENAME).read_bytes()
@@ -507,7 +547,7 @@ def _load_prepared(output_dir: Path) -> tuple[list[dict[str, Any]], dict[str, An
 
 
 def _stage1_schema(stage_id: str) -> dict[str, Any]:
-    return GENERIC_CONTEXT_JSON_SCHEMA if stage_id == "RC0_GENERIC_STAGE1" else DECISION_SUPPORT_JSON_SCHEMA
+    return NEUTRAL_GROUNDED_CONTEXT_JSON_SCHEMA if stage_id == "RC0_GENERIC_STAGE1" else DECISION_SUPPORT_JSON_SCHEMA
 
 
 def _provider_error(entry: dict[str, Any], error: Exception | None, attempts: int, latency_ms: float) -> dict[str, Any]:
@@ -517,7 +557,7 @@ def _provider_error(entry: dict[str, Any], error: Exception | None, attempts: in
 def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_factory, sleep_fn: Callable[[float], None] = sleep) -> dict[str, Any]:
     plan, manifest = _load_prepared(output_dir)
     adapter = adapter_factory()
-    artifacts: dict[tuple[str, str], tuple[bytes, str]] = {}
+    artifacts: dict[tuple[str, str], tuple[bytes, dict[str, str]]] = {}
     failed_dependencies: set[tuple[str, str]] = set()
     runs: list[dict[str, Any]] = []
     terminal: list[dict[str, Any]] = []
@@ -555,6 +595,8 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
                     mode = entry["candidate_view_mode"]
                     visible = candidate_view(public, "discovery", mode)
                     artifact = artifacts[key][0] if key else None
+                    if key:
+                        verify_artifact_envelope(artifacts[key][1], artifact)
                     prompt = build_stage2_prompt(entry["condition_id"], visible, artifact)
                     return adapter.generate(prompt, _config(), response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA)
 
@@ -572,23 +614,24 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
                     if entry["observation_kind"] == "intermediate":
                         failed_dependencies.add((entry["scenario_id"], entry["stage_id"]))
                     else:
-                        state.update({"baseline_id": entry["condition_id"], "condition": entry["candidate_view_mode"], "prompt_version": PROTOCOL_VERSION, "experiment_config_version": EXPERIMENT_VERSION, "model_adapter": adapter.identifier, "model_name": MODEL_ID, "model_version": None, "validation_error": None, "artifact_sha256": artifacts[key][1] if key else None, "experiment_config": _config().to_dict()})
+                        state.update({"baseline_id": entry["condition_id"], "condition": entry["candidate_view_mode"], "prompt_version": PROTOCOL_VERSION, "experiment_config_version": EXPERIMENT_VERSION, "model_adapter": adapter.identifier, "model_name": MODEL_ID, "model_version": None, "validation_error": None, "artifact_sha256": artifacts[key][1]["artifact_sha256"] if key else None, "experiment_config": _config().to_dict()})
                         _append_jsonl(output_dir / "runs.jsonl", state); runs.append(state)
                     continue
                 raw = {**entry, "raw_stage1_response": response.text, "model_name": response.model_name or MODEL_ID, "model_version": response.model_version, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "delivery_attempts_used": attempts}
                 if entry["observation_kind"] == "intermediate":
                     _append_jsonl(output_dir / "stage1_raw.jsonl", raw)
                     try:
-                        canonical, encoded, artifact_sha = (validate_generic_context(response.text, projection) if entry["stage_id"] == "RC0_GENERIC_STAGE1" else validate_decision_support(response.text, projection))
+                        canonical, encoded, artifact_sha = (validate_neutral_grounded_context(response.text, projection) if entry["stage_id"] == "RC0_GENERIC_STAGE1" else validate_decision_support(response.text, projection))
                     except IntermediateValidationError as exc:
                         intermediate_failures += 1
                         failed_dependencies.add((entry["scenario_id"], entry["stage_id"]))
                         state = {**entry, "terminal_state": "intermediate_invalid", "failure_category": exc.category, "validation_error": str(exc), "model_call_executed": True, "delivery_attempts_used": attempts}
                         _append_jsonl(output_dir / "terminal_states.jsonl", state); terminal.append(state)
                     else:
-                        artifact_value = {**entry, "canonical_artifact": canonical, "artifact_sha256": artifact_sha, "canonical_bytes_utf8": encoded.decode("utf-8"), "model_call_executed": True}
+                        envelope = build_artifact_envelope(entry["scenario_id"], entry["stage_id"], encoded)
+                        artifact_value = {**entry, "canonical_payload": canonical, "canonical_bytes_utf8": encoded.decode("utf-8"), "artifact_envelope": envelope, "artifact_sha256": artifact_sha, "model_call_executed": True}
                         _append_jsonl(output_dir / "stage1_artifacts.jsonl", artifact_value)
-                        artifacts[(entry["scenario_id"], entry["stage_id"])] = (encoded, artifact_sha)
+                        artifacts[(entry["scenario_id"], entry["stage_id"])] = (encoded, envelope)
                         state = {**entry, "terminal_state": "intermediate_valid", "artifact_sha256": artifact_sha, "model_call_executed": True}
                         _append_jsonl(output_dir / "terminal_states.jsonl", state); terminal.append(state)
                 else:
@@ -597,7 +640,7 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
                         validation_status, validation_error = "valid", None
                     except OutputValidationError as exc:
                         parsed, validation_status, validation_error = None, "invalid", str(exc)
-                    run = {**entry, "baseline_id": entry["condition_id"], "condition": entry["candidate_view_mode"], "prompt_version": PROTOCOL_VERSION, "experiment_config_version": EXPERIMENT_VERSION, "raw_model_response": response.text, "parsed_candidate_response": parsed, "validation_status": validation_status, "validation_error": validation_error, "provider_error": None, "model_adapter": adapter.identifier, "model_name": response.model_name or MODEL_ID, "model_version": response.model_version, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "delivery_attempts_used": attempts, "artifact_sha256": artifacts[key][1] if key else None, "experiment_config": _config().to_dict()}
+                    run = {**entry, "baseline_id": entry["condition_id"], "condition": entry["candidate_view_mode"], "prompt_version": PROTOCOL_VERSION, "experiment_config_version": EXPERIMENT_VERSION, "raw_model_response": response.text, "parsed_candidate_response": parsed, "validation_status": validation_status, "validation_error": validation_error, "provider_error": None, "model_adapter": adapter.identifier, "model_name": response.model_name or MODEL_ID, "model_version": response.model_version, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "delivery_attempts_used": attempts, "artifact_sha256": artifacts[key][1]["artifact_sha256"] if key else None, "experiment_config": _config().to_dict()}
                     _append_jsonl(output_dir / "runs.jsonl", run); runs.append(run)
                     if validation_status == "valid":
                         evaluation = {"global_execution_index": entry["global_execution_index"], "scenario_id": entry["scenario_id"], "condition_id": entry["condition_id"], "repetition_id": "1", "evaluation": asdict(evaluate_discovery(scenario, parsed))}
@@ -735,7 +778,7 @@ def analyze(output_dir: Path, analysis_dir: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Frozen Decision Recall Round B v0.1 screening scaffold")
+    parser = argparse.ArgumentParser(description="Frozen Decision Recall Round B v0.2 screening scaffold")
     parser.add_argument("--output-dir", type=Path, required=True)
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--prepare", action="store_true"); actions.add_argument("--execute", action="store_true"); actions.add_argument("--analyze", action="store_true")
