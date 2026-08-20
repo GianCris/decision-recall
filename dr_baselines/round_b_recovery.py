@@ -37,6 +37,9 @@ RECOVERY_PROTOCOL_SHA256 = "bf3b76dbfc6635a7aff4c6f7acad55b75f59b205e816eed70fd9
 ORIGINAL_IMPLEMENTATION_SHA = "167ecfa50c871c74d0aee4ed9abd9feab40fc923"
 ORIGINAL_MANIFEST_TYPE = "round-b-screening-manifest-v0.2"
 EXPECTED_DEPENDENCY_SHA256 = "98ba67a06bc97cc14ad322f4e580a9d3e232aa3c777fd580eb2823563fb367d5"
+EXPECTED_CANDIDATE_INPUT_SHA256 = "e91a3367a7179decc4cd7c874de38046ade08989a8b4daad19d046531ab667e4"
+EXPECTED_EFFECTIVE_PROMPT_SHA256 = "20302ba0ab1aa8ef58c7af6c13f9bbb500c16ca1c7b741266986a8da003072a1"
+EXPECTED_DISCOVERY_SCHEMA_SHA256 = "c1da8e87a79950b25c57bfdd411a44c6482ec15cbadeca69b6019e7fbda52ce5"
 PLAN_FILENAME = "recovery_execution_plan.json"
 MANIFEST_FILENAME = "recovery_manifest.json"
 IDENTITY_FILENAME = "identity_evidence.json"
@@ -70,10 +73,16 @@ class EligibleSlot:
     original_http_status_code: int
     dependency_artifact_sha256: str
     dependency_canonical_bytes: bytes
+    historical_experiment_config: dict[str, Any]
+    historical_model_name: str
+    historical_model_adapter: str
 
     def public_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value.pop("dependency_canonical_bytes")
+        value.pop("historical_experiment_config")
+        value.pop("historical_model_name")
+        value.pop("historical_model_adapter")
         return value
 
 
@@ -128,22 +137,35 @@ def _source_hashes(original_dir: Path) -> dict[str, str]:
     return {p.name: _sha(p.read_bytes()) for p in sorted(original_dir.iterdir(), key=lambda p: p.name) if p.is_file()}
 
 
-RECONSTRUCTION_SOURCE_PATHS = (
-    "dr_bench/views.py", "dr_bench/data/dev.jsonl", "dr_baselines/baselines.py",
-    "dr_baselines/round_b.py", "dr_baselines/output.py",
+CANDIDATE_INPUT_SOURCE_PATHS = (
+    "dr_bench/__init__.py", "dr_bench/catalog.py", "dr_bench/views.py",
+    "dr_bench/validation.py", "dr_bench/paths.py", "dr_bench/simulator.py",
+    "dr_bench/data/dev.jsonl", "dr_bench/data/holdout.jsonl",
+    "dr_bench/data/interaction_chains.json", "dr_baselines/round_b.py",
 )
+PROMPT_SOURCE_PATHS = ("dr_baselines/baselines.py", "dr_baselines/round_b.py")
+SCHEMA_SOURCE_PATHS = ("dr_baselines/output.py", "dr_baselines/round_b.py")
 
 
-def _frozen_reconstruction_source_identity() -> dict[str, str]:
-    """Prove HEAD uses the exact original scientific input/prompt/schema sources."""
-    result = {}
-    for path in RECONSTRUCTION_SOURCE_PATHS:
+def _git_object_proof(paths: tuple[str, ...]) -> dict[str, Any]:
+    """Compare committed source objects to the original scientific commit."""
+    files = {}
+    all_equal = True
+    for path in paths:
         original = subprocess.run(["git", "show", f"{ORIGINAL_IMPLEMENTATION_SHA}:{path}"], check=True, capture_output=True).stdout
         current = subprocess.run(["git", "show", f"HEAD:{path}"], check=True, capture_output=True).stdout
-        if current != original:
-            raise IdentityProofError(f"frozen scientific reconstruction source changed: {path}")
-        result[path] = _sha(original)
-    return result
+        equal = current == original
+        all_equal &= equal
+        files[path] = {"original_sha256": _sha(original), "head_sha256": _sha(current), "equal": equal}
+    return {"reconstruction_source_commit": ORIGINAL_IMPLEMENTATION_SHA, "current_commit": _git_sha(), "files": files, "all_equal": all_equal}
+
+
+def _scientific_source_proofs() -> dict[str, Any]:
+    return {
+        "candidate_visible_input": _git_object_proof(CANDIDATE_INPUT_SOURCE_PATHS),
+        "effective_stage2_prompt": _git_object_proof(PROMPT_SOURCE_PATHS),
+        "discovery_schema_object": _git_object_proof(SCHEMA_SOURCE_PATHS),
+    }
 
 
 def verify_original_source(original_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str]]:
@@ -213,7 +235,10 @@ def find_recovery_eligible_slots(original_dir: Path) -> list[EligibleSlot]:
         )
         if not all(checks):
             continue
-        eligible.append(EligibleSlot(index, entry["scenario_id"], entry["condition_id"], entry["stage_id"], entry["observation_kind"], entry["repetition_id"], entry["candidate_view_mode"], dependency, failure["started_at_utc"], failure["completed_at_utc"], failure["http_status_code"], artifact_sha, artifact_bytes))
+        historical_config = run.get("experiment_config")
+        if not isinstance(historical_config, dict) or not isinstance(run.get("model_name"), str) or not isinstance(run.get("model_adapter"), str):
+            continue
+        eligible.append(EligibleSlot(index, entry["scenario_id"], entry["condition_id"], entry["stage_id"], entry["observation_kind"], entry["repetition_id"], entry["candidate_view_mode"], dependency, failure["started_at_utc"], failure["completed_at_utc"], failure["http_status_code"], artifact_sha, artifact_bytes, historical_config, run["model_name"], run["model_adapter"]))
     return eligible
 
 
@@ -227,21 +252,31 @@ def _scientific_inputs(slot: EligibleSlot) -> tuple[dict[str, Any], bytes, bytes
     return visible, candidate_bytes, prompt_bytes, schema_bytes
 
 
-def _identity_evidence(slot: EligibleSlot, candidate_bytes: bytes, prompt_bytes: bytes, schema_bytes: bytes) -> dict[str, Any]:
+def _identity_evidence(slot: EligibleSlot, candidate_bytes: bytes, prompt_bytes: bytes, schema_bytes: bytes, original_manifest: dict[str, Any], source_proofs: dict[str, Any]) -> dict[str, Any]:
     schema_digest = schema_sha256(DISCOVERY_RESPONSE_JSON_SCHEMA)
+    candidate_sha = _sha(candidate_bytes)
+    prompt_sha = _sha(prompt_bytes)
+    # RunRecord JSON persistence converts tuples to arrays; compare the exact
+    # persisted JSON representation rather than Python container incidentalities.
+    current_config = json.loads(json.dumps(original_config().to_dict()))
+    historical_provider = {key: original_manifest.get(key) for key in ("provider", "project_id", "location", "model_id", "sdk_package", "sdk_version")}
+    required_provider = {"provider": "Google Cloud Agent Platform / Vertex", "project_id": PROJECT_ID, "location": LOCATION, "model_id": MODEL_ID, "sdk_package": SDK_PACKAGE, "sdk_version": SDK_VERSION}
+    candidate_source = source_proofs["candidate_visible_input"]
+    prompt_source = source_proofs["effective_stage2_prompt"]
+    schema_source = source_proofs["discovery_schema_object"]
     rows = {
-        "candidate_visible_input": {"class": "B", "proven": bool(candidate_bytes), "sha256": _sha(candidate_bytes)},
-        "candidate_view_mode": {"class": "A", "proven": slot.candidate_view_mode == "implicit", "value": slot.candidate_view_mode},
-        "dependency_canonical_bytes": {"class": "A", "proven": _sha(slot.dependency_canonical_bytes) == slot.dependency_artifact_sha256, "sha256": _sha(slot.dependency_canonical_bytes)},
-        "dependency_artifact_sha256": {"class": "A", "proven": slot.dependency_artifact_sha256 == EXPECTED_DEPENDENCY_SHA256, "value": slot.dependency_artifact_sha256},
-        "effective_stage2_prompt_bytes": {"class": "B", "proven": bool(prompt_bytes), "sha256": _sha(prompt_bytes)},
-        "effective_stage2_prompt_sha256": {"class": "B", "proven": bool(prompt_bytes), "value": _sha(prompt_bytes)},
-        "discovery_schema_object": {"class": "B", "proven": schema_digest == "c1da8e87a79950b25c57bfdd411a44c6482ec15cbadeca69b6019e7fbda52ce5", "canonical_file_sha256": _sha(schema_bytes)},
-        "discovery_schema_version_sha": {"class": "A", "proven": DISCOVERY_RESPONSE_SCHEMA_VERSION == "discovery-response-v0.1", "version": DISCOVERY_RESPONSE_SCHEMA_VERSION, "sha256": schema_digest},
-        "model_identifier": {"class": "A", "proven": MODEL_ID == "gemini-3.7-flash", "value": MODEL_ID},
-        "generation_configuration": {"class": "A", "proven": True, "value": original_config().to_dict()},
-        "provider_location_configuration": {"class": "A", "proven": True, "value": {"provider": "Google Cloud Agent Platform / Vertex", "project_id": PROJECT_ID, "location": LOCATION, "sdk_package": SDK_PACKAGE, "sdk_version": SDK_VERSION}},
-        "condition_stage_identity": {"class": "A", "proven": slot.condition_id == "RC0" and slot.stage_id == "RC0_STAGE2", "value": slot.public_dict()},
+        "candidate_visible_input": {"class": "B" if candidate_source["all_equal"] else "C", "proven": candidate_source["all_equal"] and candidate_sha == EXPECTED_CANDIDATE_INPUT_SHA256, "historical_source": "immutable DEV data and loader/view path at original implementation commit", "reconstruction_source_commit": ORIGINAL_IMPLEMENTATION_SHA, "source_file_proof": candidate_source, "historical_prepared_sha256": EXPECTED_CANDIDATE_INPUT_SHA256, "reconstructed_sha256": candidate_sha, "comparison_equal": candidate_sha == EXPECTED_CANDIDATE_INPUT_SHA256},
+        "candidate_view_mode": {"class": "A", "proven": slot.candidate_view_mode == "implicit", "historical_source": "execution_plan.json and failed runs.jsonl", "historical_value": slot.candidate_view_mode, "required_value": "implicit", "comparison_equal": slot.candidate_view_mode == "implicit"},
+        "dependency_canonical_bytes": {"class": "A", "proven": _sha(slot.dependency_canonical_bytes) == slot.dependency_artifact_sha256, "historical_source": "stage1_artifacts.jsonl canonical_bytes_utf8", "historical_persisted_sha256": slot.dependency_artifact_sha256, "recomputed_sha256": _sha(slot.dependency_canonical_bytes), "comparison_equal": _sha(slot.dependency_canonical_bytes) == slot.dependency_artifact_sha256},
+        "dependency_artifact_sha256": {"class": "A", "proven": slot.dependency_artifact_sha256 == EXPECTED_DEPENDENCY_SHA256, "historical_source": "Stage-1 artifact, envelope, and failed RunRecord", "historical_persisted_sha256": slot.dependency_artifact_sha256, "required_sha256": EXPECTED_DEPENDENCY_SHA256, "comparison_equal": slot.dependency_artifact_sha256 == EXPECTED_DEPENDENCY_SHA256},
+        "effective_stage2_prompt_bytes": {"class": "B" if prompt_source["all_equal"] and candidate_source["all_equal"] else "C", "proven": prompt_source["all_equal"] and candidate_source["all_equal"] and prompt_sha == EXPECTED_EFFECTIVE_PROMPT_SHA256 and _sha(slot.dependency_canonical_bytes) == EXPECTED_DEPENDENCY_SHA256, "historical_source": "original BASE_TASK_PROMPT/build_stage2_prompt/canonical formatting plus proven candidate and dependency bytes", "reconstruction_source_commit": ORIGINAL_IMPLEMENTATION_SHA, "source_file_proof": prompt_source, "candidate_source_proof_equal": candidate_source["all_equal"], "dependency_sha256": _sha(slot.dependency_canonical_bytes), "historical_prepared_sha256": EXPECTED_EFFECTIVE_PROMPT_SHA256, "reconstructed_sha256": prompt_sha, "comparison_equal": prompt_sha == EXPECTED_EFFECTIVE_PROMPT_SHA256},
+        "effective_stage2_prompt_sha256": {"class": "B" if prompt_source["all_equal"] else "C", "proven": prompt_source["all_equal"] and prompt_sha == EXPECTED_EFFECTIVE_PROMPT_SHA256, "historical_source": "deterministically reconstructed effective prompt bytes", "reconstruction_source_commit": ORIGINAL_IMPLEMENTATION_SHA, "historical_prepared_sha256": EXPECTED_EFFECTIVE_PROMPT_SHA256, "reconstructed_sha256": prompt_sha, "comparison_equal": prompt_sha == EXPECTED_EFFECTIVE_PROMPT_SHA256},
+        "discovery_schema_object": {"class": "B" if schema_source["all_equal"] else "C", "proven": schema_source["all_equal"] and schema_digest == original_manifest.get("discovery_schema_sha256") == EXPECTED_DISCOVERY_SCHEMA_SHA256, "historical_source": "original output schema source at implementation commit", "reconstruction_source_commit": ORIGINAL_IMPLEMENTATION_SHA, "source_file_proof": schema_source, "historical_persisted_sha256": original_manifest.get("discovery_schema_sha256"), "reconstructed_contract_sha256": schema_digest, "canonical_file_sha256": _sha(schema_bytes), "comparison_equal": schema_digest == original_manifest.get("discovery_schema_sha256")},
+        "discovery_schema_version_sha": {"class": "A", "proven": original_manifest.get("discovery_schema_version") == DISCOVERY_RESPONSE_SCHEMA_VERSION and original_manifest.get("discovery_schema_sha256") == schema_digest == EXPECTED_DISCOVERY_SCHEMA_SHA256, "historical_source": "experiment_manifest.json", "historical_version": original_manifest.get("discovery_schema_version"), "historical_sha256": original_manifest.get("discovery_schema_sha256"), "required_version": DISCOVERY_RESPONSE_SCHEMA_VERSION, "required_sha256": EXPECTED_DISCOVERY_SCHEMA_SHA256, "comparison_equal": original_manifest.get("discovery_schema_version") == DISCOVERY_RESPONSE_SCHEMA_VERSION and original_manifest.get("discovery_schema_sha256") == schema_digest},
+        "model_identifier": {"class": "A", "proven": original_manifest.get("model_id") == slot.historical_model_name == MODEL_ID and slot.historical_model_adapter == "google-genai-vertex-gemini-3.7-flash-v0.1", "historical_source": "experiment_manifest.json and failed runs.jsonl", "manifest_value": original_manifest.get("model_id"), "run_record_value": slot.historical_model_name, "run_record_adapter": slot.historical_model_adapter, "required_value": MODEL_ID, "required_adapter": "google-genai-vertex-gemini-3.7-flash-v0.1", "comparison_equal": original_manifest.get("model_id") == slot.historical_model_name == MODEL_ID and slot.historical_model_adapter == "google-genai-vertex-gemini-3.7-flash-v0.1"},
+        "generation_configuration": {"class": "A", "proven": slot.historical_experiment_config == current_config, "historical_source": "failed-slot runs.jsonl experiment_config", "historical_persisted_value": slot.historical_experiment_config, "recovery_required_value": current_config, "comparison_equal": slot.historical_experiment_config == current_config},
+        "provider_location_configuration": {"class": "A", "proven": historical_provider == required_provider, "historical_source": "experiment_manifest.json", "historical_persisted_value": historical_provider, "recovery_required_value": required_provider, "comparison_equal": historical_provider == required_provider},
+        "condition_stage_identity": {"class": "A", "proven": slot.condition_id == "RC0" and slot.stage_id == "RC0_STAGE2", "historical_source": "execution plan, lifecycle, terminal record, and failed RunRecord", "historical_persisted_value": slot.public_dict(), "required_value": {"condition_id": "RC0", "stage_id": "RC0_STAGE2"}, "comparison_equal": slot.condition_id == "RC0" and slot.stage_id == "RC0_STAGE2"},
     }
     return {"components": rows, "category_c_count": sum(x["class"] == "C" for x in rows.values()), "all_proven": all(x["proven"] for x in rows.values())}
 
@@ -258,7 +293,7 @@ def prepare_recovery(original_dir: Path, output_dir: Path) -> dict[str, Any]:
     if not _tracked_clean():
         raise RecoveryError("tracked worktree must be clean before recovery PREPARE")
     original_manifest, _, original_hashes = verify_original_source(original_dir)
-    reconstruction_source_identity = _frozen_reconstruction_source_identity()
+    source_proofs = _scientific_source_proofs()
     eligible = find_recovery_eligible_slots(original_dir)
     if len(eligible) != 1:
         raise RecoveryError(f"recovery requires exactly one eligible slot; found {len(eligible)}")
@@ -266,7 +301,7 @@ def prepare_recovery(original_dir: Path, output_dir: Path) -> dict[str, Any]:
     if slot.dependency_artifact_sha256 != EXPECTED_DEPENDENCY_SHA256:
         raise IdentityProofError("original dependency artifact SHA differs from the frozen value")
     _, candidate_bytes, prompt_bytes, schema_bytes = _scientific_inputs(slot)
-    evidence = _identity_evidence(slot, candidate_bytes, prompt_bytes, schema_bytes)
+    evidence = _identity_evidence(slot, candidate_bytes, prompt_bytes, schema_bytes, original_manifest, source_proofs)
     if evidence["category_c_count"] or not evidence["all_proven"]:
         raise IdentityProofError("RECOVERY BLOCKED — ORIGINAL SCIENTIFIC INPUT IDENTITY CANNOT BE PROVEN")
     plan_bytes = _canonical_json(build_recovery_plan(slot))
@@ -278,7 +313,7 @@ def prepare_recovery(original_dir: Path, output_dir: Path) -> dict[str, Any]:
         "original_experiment_version": original_manifest["experiment_version"], "original_manifest_type": original_manifest["manifest_type"],
         "original_implementation_git_sha": original_manifest["git_commit_sha"], "original_round_b_protocol_sha256": original_manifest["round_b_protocol_sha256"],
         "original_execution_plan_sha256": original_manifest["execution_plan_sha256"], "original_source_file_sha256": original_hashes,
-        "frozen_reconstruction_source_sha256": reconstruction_source_identity,
+        "scientific_source_proofs": source_proofs,
         "eligible_slot_count": 1, "eligible_slot": slot.public_dict(), "planned_recovery_scientific_observations": 1,
         "recovery_execution_plan_sha256": _sha(plan_bytes), "candidate_input_sha256": _sha(candidate_bytes),
         "dependency_artifact_sha256": slot.dependency_artifact_sha256, "effective_prompt_sha256": _sha(prompt_bytes),

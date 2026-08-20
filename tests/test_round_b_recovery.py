@@ -11,10 +11,11 @@ from google.genai import errors as genai_errors
 from dr_baselines.dev_experiment import RETRYABLE_HTTP_STATUS_CODES, _retryable_delivery_failure, run_delivery_attempts
 from dr_baselines.models import ModelResponse
 from dr_baselines.round_b import build_stage2_prompt
+from dr_baselines.round_b import _config as round_b_config
 from dr_baselines.round_b import execute as execute_round_b
 from dr_baselines.round_b_recovery import (
     MANIFEST_FILENAME, RECOVERY_MANIFEST_TYPE, RECOVERY_PROTOCOL_SHA256,
-    IdentityProofError, RecoveryError, _identity_evidence,
+    IdentityProofError, RecoveryError, _identity_evidence, _scientific_inputs,
     _load_prepared_recovery, build_recovery_plan, execute_recovery,
     find_recovery_eligible_slots, prepare_recovery, recovered_view_metadata,
     recovery_protocol_sha256,
@@ -52,20 +53,26 @@ class RoundBRecoveryTests(unittest.TestCase):
 
     def write_fixture(self):
         plan_bytes = (json.dumps([self.slot], indent=2, sort_keys=True) + "\n").encode(); (self.original / "execution_plan.json").write_bytes(plan_bytes)
-        manifest = {"manifest_type": "round-b-screening-manifest-v0.2", "experiment_version": "round-b-screening-v0.2", "git_commit_sha": "167ecfa50c871c74d0aee4ed9abd9feab40fc923", "round_b_protocol_sha256": "eba2cd3d3c848ca43a0c26e1eb7c23e1c5be3af6a44a218a2018bb4019c1f335", "execution_plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "model_id": "gemini-3.7-flash", "provider": "Google Cloud Agent Platform / Vertex", "project_id": "decision-recall-hackathon", "location": "global"}
+        manifest = {"manifest_type": "round-b-screening-manifest-v0.2", "experiment_version": "round-b-screening-v0.2", "git_commit_sha": "167ecfa50c871c74d0aee4ed9abd9feab40fc923", "round_b_protocol_sha256": "eba2cd3d3c848ca43a0c26e1eb7c23e1c5be3af6a44a218a2018bb4019c1f335", "execution_plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "model_id": "gemini-3.7-flash", "provider": "Google Cloud Agent Platform / Vertex", "project_id": "decision-recall-hackathon", "location": "global", "sdk_package": "google-genai", "sdk_version": "2.14.0", "discovery_schema_version": "discovery-response-v0.1", "discovery_schema_sha256": "c1da8e87a79950b25c57bfdd411a44c6482ec15cbadeca69b6019e7fbda52ce5"}
         (self.original / "experiment_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         (self.original / "summary.json").write_text(json.dumps({"experiment_status": "completed", "classification_status": "INCOMPLETE / INFRASTRUCTURE", "provider_failures": 1, "abort_reason": None}), encoding="utf-8")
         failure = {**self.slot, "event": "delivery_attempt_completed", "outcome": "pre_response_failure", "model_response_obtained": False, "will_retry": False, "started_at_utc": "2026-01-01T00:00:00Z", "completed_at_utc": "2026-01-01T00:02:00Z", "http_status_code": 499}
         self.jsonl("delivery_attempts.jsonl", [failure])
         terminal = {**self.slot, "validation_status": "provider_error", "raw_model_response": "", "parsed_candidate_response": None}
-        self.jsonl("terminal_states.jsonl", [terminal]); self.jsonl("runs.jsonl", [{**terminal, "artifact_sha256": self.artifact_sha}]); self.jsonl("evaluations.jsonl", [])
+        self.jsonl("terminal_states.jsonl", [terminal]); self.jsonl("runs.jsonl", [{**terminal, "artifact_sha256": self.artifact_sha, "experiment_config": round_b_config().to_dict(), "model_name": "gemini-3.7-flash", "model_adapter": "google-genai-vertex-gemini-3.7-flash-v0.1"}]); self.jsonl("evaluations.jsonl", [])
         self.jsonl("stage1_artifacts.jsonl", [{"scenario_id": "dev-002", "stage_id": "RC0_GENERIC_STAGE1", "model_call_executed": True, "canonical_bytes_utf8": self.artifact_bytes.decode(), "artifact_sha256": self.artifact_sha, "artifact_envelope": {"artifact_sha256": self.artifact_sha}}])
 
     def frozen_git(self):
-        return patch.multiple("dr_baselines.round_b_recovery", _git_sha=Mock(return_value="f" * 40), _git_branch=Mock(return_value="agent/baselines-v0.1"), _tracked_clean=Mock(return_value=True), _frozen_reconstruction_source_identity=Mock(return_value={"frozen": "a" * 64}))
+        proof = {"reconstruction_source_commit": "167ecfa50c871c74d0aee4ed9abd9feab40fc923", "current_commit": "f" * 40, "files": {"frozen": {"original_sha256": "a" * 64, "head_sha256": "a" * 64, "equal": True}}, "all_equal": True}
+        return patch.multiple("dr_baselines.round_b_recovery", _git_sha=Mock(return_value="f" * 40), _git_branch=Mock(return_value="agent/baselines-v0.1"), _tracked_clean=Mock(return_value=True), _scientific_source_proofs=Mock(return_value={"candidate_visible_input": proof, "effective_stage2_prompt": proof, "discovery_schema_object": proof}))
+
+    def source_proofs(self, candidate=True, prompt=True, schema=True):
+        def value(equal): return {"reconstruction_source_commit": "167ecfa50c871c74d0aee4ed9abd9feab40fc923", "current_commit": "f" * 40, "files": {}, "all_equal": equal}
+        return {"candidate_visible_input": value(candidate), "effective_stage2_prompt": value(prompt), "discovery_schema_object": value(schema)}
 
     def prepared(self):
-        with self.frozen_git(), patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha):
+        prompt_sha = hashlib.sha256(_scientific_inputs(find_recovery_eligible_slots(self.original)[0])[2]).hexdigest()
+        with self.frozen_git(), patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha), patch("dr_baselines.round_b_recovery.EXPECTED_EFFECTIVE_PROMPT_SHA256", prompt_sha):
             prepare_recovery(self.original, self.output)
 
     def test_eligibility_and_exact_one_slot_plan_without_stage1(self):
@@ -76,7 +83,7 @@ class RoundBRecoveryTests(unittest.TestCase):
 
     def test_invalid_valid_and_response_bearing_slots_are_ineligible(self):
         for values in ({"validation_status": "invalid", "raw_model_response": "{}", "parsed_candidate_response": None}, {"validation_status": "valid", "raw_model_response": '{"decisions":[]}', "parsed_candidate_response": {"decisions": []}}, {"validation_status": "provider_error", "raw_model_response": "returned", "parsed_candidate_response": None}):
-            record = {**self.slot, **values}; self.jsonl("terminal_states.jsonl", [record]); self.jsonl("runs.jsonl", [{**record, "artifact_sha256": self.artifact_sha}])
+            record = {**self.slot, **values}; self.jsonl("terminal_states.jsonl", [record]); self.jsonl("runs.jsonl", [{**record, "artifact_sha256": self.artifact_sha, "experiment_config": round_b_config().to_dict(), "model_name": "gemini-3.7-flash", "model_adapter": "google-genai-vertex-gemini-3.7-flash-v0.1"}])
             self.assertEqual(find_recovery_eligible_slots(self.original), [])
 
     def test_evaluation_or_missing_dependency_blocks(self):
@@ -90,7 +97,8 @@ class RoundBRecoveryTests(unittest.TestCase):
 
     def test_prepare_is_offline_read_only_and_freezes_identity(self):
         before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.original.iterdir()}
-        with self.frozen_git(), patch("dr_baselines.round_b_recovery._dev_adapter_factory") as factory, patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha):
+        prompt_sha = hashlib.sha256(_scientific_inputs(find_recovery_eligible_slots(self.original)[0])[2]).hexdigest()
+        with self.frozen_git(), patch("dr_baselines.round_b_recovery._dev_adapter_factory") as factory, patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha), patch("dr_baselines.round_b_recovery.EXPECTED_EFFECTIVE_PROMPT_SHA256", prompt_sha):
             manifest = prepare_recovery(self.original, self.output)
         factory.assert_not_called(); self.assertEqual(manifest["manifest_type"], RECOVERY_MANIFEST_TYPE)
         self.assertEqual(manifest["planned_recovery_scientific_observations"], 1); self.assertTrue(manifest["execute_eligible"])
@@ -105,10 +113,44 @@ class RoundBRecoveryTests(unittest.TestCase):
         with self.frozen_git(), self.assertRaisesRegex(RecoveryError, "exactly one"): prepare_recovery(self.original, self.output)
 
     def test_identity_classes_and_category_c_or_failed_proof_block(self):
-        evidence = _identity_evidence(find_recovery_eligible_slots(self.original)[0], b"candidate", b"prompt", b"schema")
+        slot = find_recovery_eligible_slots(self.original)[0]
+        manifest = json.loads((self.original / "experiment_manifest.json").read_text())
+        evidence = _identity_evidence(slot, b"candidate", b"prompt", b"schema", manifest, self.source_proofs())
         self.assertEqual({x["class"] for x in evidence["components"].values()}, {"A", "B"})
         with self.frozen_git(), patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha), patch("dr_baselines.round_b_recovery._identity_evidence", return_value={"category_c_count": 1, "all_proven": False}):
             with self.assertRaises(IdentityProofError): prepare_recovery(self.original, self.output)
+
+    def test_generation_and_provider_proofs_are_historical_comparisons(self):
+        slot = find_recovery_eligible_slots(self.original)[0]; manifest = json.loads((self.original / "experiment_manifest.json").read_text())
+        with patch("dr_baselines.round_b_recovery.EXPECTED_CANDIDATE_INPUT_SHA256", hashlib.sha256(b"candidate").hexdigest()), patch("dr_baselines.round_b_recovery.EXPECTED_EFFECTIVE_PROMPT_SHA256", hashlib.sha256(b"prompt").hexdigest()):
+            evidence = _identity_evidence(slot, b"candidate", b"prompt", b"schema", manifest, self.source_proofs())
+        self.assertTrue(evidence["components"]["generation_configuration"]["comparison_equal"])
+        self.assertTrue(evidence["components"]["provider_location_configuration"]["comparison_equal"])
+        slot.historical_experiment_config["temperature"] = 0.5
+        manifest["location"] = "changed"
+        evidence = _identity_evidence(slot, b"candidate", b"prompt", b"schema", manifest, self.source_proofs())
+        self.assertFalse(evidence["components"]["generation_configuration"]["proven"])
+        self.assertFalse(evidence["components"]["provider_location_configuration"]["proven"])
+
+    def test_candidate_prompt_and_schema_b_proofs_require_original_sources_and_exact_bytes(self):
+        slot = find_recovery_eligible_slots(self.original)[0]; manifest = json.loads((self.original / "experiment_manifest.json").read_text())
+        candidate, prompt, schema = b"candidate", b"prompt", b"schema"
+        with patch("dr_baselines.round_b_recovery.EXPECTED_CANDIDATE_INPUT_SHA256", hashlib.sha256(candidate).hexdigest()), patch("dr_baselines.round_b_recovery.EXPECTED_EFFECTIVE_PROMPT_SHA256", hashlib.sha256(prompt).hexdigest()):
+            candidate_bad = _identity_evidence(slot, candidate, prompt, schema, manifest, self.source_proofs(candidate=False))
+            prompt_bad = _identity_evidence(slot, candidate, prompt, schema, manifest, self.source_proofs(prompt=False))
+            schema_bad = _identity_evidence(slot, candidate, prompt, schema, manifest, self.source_proofs(schema=False))
+        self.assertFalse(candidate_bad["components"]["candidate_visible_input"]["proven"])
+        self.assertFalse(prompt_bad["components"]["effective_stage2_prompt_bytes"]["proven"])
+        self.assertFalse(schema_bad["components"]["discovery_schema_object"]["proven"])
+        nonempty_wrong = _identity_evidence(slot, b"nonempty", b"nonempty", schema, manifest, self.source_proofs())
+        self.assertFalse(nonempty_wrong["components"]["candidate_visible_input"]["proven"])
+        self.assertFalse(nonempty_wrong["components"]["effective_stage2_prompt_bytes"]["proven"])
+
+    def test_dependency_mismatch_breaks_effective_prompt_proof(self):
+        slot = find_recovery_eligible_slots(self.original)[0]; manifest = json.loads((self.original / "experiment_manifest.json").read_text())
+        object.__setattr__(slot, "dependency_canonical_bytes", b"different")
+        evidence = _identity_evidence(slot, b"candidate", b"prompt", b"schema", manifest, self.source_proofs())
+        self.assertFalse(evidence["components"]["effective_stage2_prompt_bytes"]["proven"])
 
     def test_prompt_exact_artifact_envelope_invisible_and_no_result_context(self):
         slot = find_recovery_eligible_slots(self.original)[0]; self.prepared()
