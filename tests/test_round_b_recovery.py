@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from google.genai import errors as genai_errors
+import dr_bench.catalog as catalog
+import dr_baselines.round_b_recovery as recovery
 
 from dr_baselines.dev_experiment import RETRYABLE_HTTP_STATUS_CODES, _retryable_delivery_failure, run_delivery_attempts
 from dr_baselines.models import ModelResponse
@@ -37,6 +39,18 @@ class Adapter:
         if self.error: raise self.error
         return self.response
     def close(self): pass
+
+
+class HoldoutAccessGuard:
+    def __init__(self, resource, attempts):
+        self.resource = resource; self.attempts = attempts
+    def joinpath(self, *descendants):
+        if any(str(value).replace("\\", "/").endswith("holdout.jsonl") for value in descendants):
+            self.attempts.append(tuple(map(str, descendants)))
+            raise AssertionError("sealed holdout access attempted")
+        return HoldoutAccessGuard(self.resource.joinpath(*descendants), self.attempts)
+    def read_text(self, *args, **kwargs):
+        return self.resource.read_text(*args, **kwargs)
 
 
 class RoundBRecoveryTests(unittest.TestCase):
@@ -203,6 +217,27 @@ class RoundBRecoveryTests(unittest.TestCase):
 
     def test_protocol_freeze(self):
         self.assertEqual(recovery_protocol_sha256(), RECOVERY_PROTOCOL_SHA256)
+
+    def test_git_object_proof_has_zero_holdout_dependency(self):
+        all_paths = recovery.CANDIDATE_INPUT_SOURCE_PATHS + recovery.PROMPT_SOURCE_PATHS + recovery.SCHEMA_SOURCE_PATHS
+        self.assertNotIn("dr_bench/data/holdout.jsonl", all_paths)
+        real_run = recovery.subprocess.run
+        with patch("dr_baselines.round_b_recovery.subprocess.run", wraps=real_run) as run:
+            proofs = recovery._scientific_source_proofs()
+        requested = [str(part) for call in run.call_args_list for part in call.args[0]]
+        self.assertFalse(any("holdout.jsonl" in part for part in requested))
+        self.assertTrue(all(proof["all_equal"] for proof in proofs.values()))
+
+    def test_prepare_runtime_candidate_reconstruction_is_dev_only_and_guarded(self):
+        attempts = []
+        real_files = catalog.files
+        def guarded_files(package): return HoldoutAccessGuard(real_files(package), attempts)
+        prompt_sha = hashlib.sha256(_scientific_inputs(find_recovery_eligible_slots(self.original)[0])[2]).hexdigest()
+        with self.frozen_git(), patch("dr_baselines.round_b_recovery.EXPECTED_DEPENDENCY_SHA256", self.artifact_sha), patch("dr_baselines.round_b_recovery.EXPECTED_EFFECTIVE_PROMPT_SHA256", prompt_sha), patch("dr_bench.catalog.files", side_effect=guarded_files), patch("dr_baselines.round_b_recovery.load_scenarios", wraps=catalog.load_scenarios) as loader:
+            prepare_recovery(self.original, self.output)
+        self.assertEqual(attempts, [])
+        self.assertTrue(loader.called)
+        self.assertTrue(all(call.args == ("dev",) for call in loader.call_args_list))
 
 
 if __name__ == "__main__": unittest.main()

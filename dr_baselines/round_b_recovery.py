@@ -11,7 +11,7 @@ from pathlib import Path
 from time import sleep
 from typing import Any, Callable
 
-from dr_bench import candidate_view, evaluate_discovery, load_scenario
+from dr_bench import candidate_view, evaluate_discovery, load_scenarios
 
 from .dev_experiment import (
     DELIVERY_BACKOFF_SECONDS, DELIVERY_POLICY_VERSION, LOCATION,
@@ -140,8 +140,8 @@ def _source_hashes(original_dir: Path) -> dict[str, str]:
 CANDIDATE_INPUT_SOURCE_PATHS = (
     "dr_bench/__init__.py", "dr_bench/catalog.py", "dr_bench/views.py",
     "dr_bench/validation.py", "dr_bench/paths.py", "dr_bench/simulator.py",
-    "dr_bench/data/dev.jsonl", "dr_bench/data/holdout.jsonl",
-    "dr_bench/data/interaction_chains.json", "dr_baselines/round_b.py",
+    "dr_bench/data/dev.jsonl", "dr_bench/data/interaction_chains.json",
+    "dr_baselines/round_b.py",
 )
 PROMPT_SOURCE_PATHS = ("dr_baselines/baselines.py", "dr_baselines/round_b.py")
 SCHEMA_SOURCE_PATHS = ("dr_baselines/output.py", "dr_baselines/round_b.py")
@@ -242,8 +242,15 @@ def find_recovery_eligible_slots(original_dir: Path) -> list[EligibleSlot]:
     return eligible
 
 
+def _load_dev_scenario(scenario_id: str) -> dict[str, Any]:
+    matches = [scenario for scenario in load_scenarios("dev") if scenario["id"] == scenario_id]
+    if len(matches) != 1:
+        raise IdentityProofError(f"DEV-only scenario identity is not unique: {scenario_id}")
+    return matches[0]
+
+
 def _scientific_inputs(slot: EligibleSlot) -> tuple[dict[str, Any], bytes, bytes, bytes]:
-    scenario = load_scenario(slot.scenario_id)
+    scenario = _load_dev_scenario(slot.scenario_id)
     public = {key: value for key, value in scenario.items() if key != "private"}
     visible = candidate_view(public, "discovery", slot.candidate_view_mode)
     candidate_bytes = _canonical_json(visible)
@@ -388,7 +395,7 @@ def execute_recovery(original_dir: Path, output_dir: Path, adapter_factory: Call
             run = {**entry, "validation_status": validation, "validation_error": error, "provider_error": None, "raw_model_response": response.text, "parsed_candidate_response": parsed, "delivery_attempts_used": delivery["attempts_used"], "model_name": response.model_name or MODEL_ID, "model_version": response.model_version, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens}
             status = "RECOVERED / VALID" if validation == "valid" else "FAIL / MODEL OUTPUT"
             if validation == "valid":
-                evaluation = {"original_global_execution_index": entry["original_global_execution_index"], "scenario_id": entry["scenario_id"], "condition_id": entry["condition_id"], "repetition_id": entry["repetition_id"], "evaluation": asdict(evaluate_discovery(load_scenario(entry["scenario_id"]), parsed))}
+                evaluation = {"original_global_execution_index": entry["original_global_execution_index"], "scenario_id": entry["scenario_id"], "condition_id": entry["condition_id"], "repetition_id": entry["repetition_id"], "evaluation": asdict(evaluate_discovery(_load_dev_scenario(entry["scenario_id"]), parsed))}
                 (output_dir / "recovery_evaluation.json").write_bytes(_canonical_json(evaluation))
         completed = _utc_now(); run.update({"recovery_invocation_at_utc": invoked, "recovery_completion_at_utc": completed})
         (output_dir / "recovery_run.json").write_bytes(_canonical_json(run))
