@@ -47,3 +47,18 @@ envelopes and hashes, terminal states, final RunRecords, evaluations, and
 are intermediate observations and never enter Discovery performance
 denominators. Analysis creates a decision-level ledger, JSON analysis, and a
 claim-bounded Markdown report.
+
+## Separately authorized infrastructure recovery
+
+The frozen recovery protocol is `docs/ROUND_B_INFRASTRUCTURE_RECOVERY_V0.1.md`.
+Its dedicated scaffold is incompatible with ordinary Round B directories and
+never mutates the historical screening output.
+
+Offline PREPARE, which makes no provider call:
+
+```powershell
+python -m dr_baselines.round_b_recovery --original-dir round-b-v02-screening-output --output-dir round-b-v02-infra-recovery-output --prepare
+```
+
+Execution requires separate explicit authorization. Recovery output must use a
+new, empty path and cannot be resumed.
