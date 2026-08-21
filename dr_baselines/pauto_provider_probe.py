@@ -11,7 +11,7 @@ from google.genai import types
 from .decision_premise_capture import (
     PAUTO_INSTRUCTION, PAUTO_SCHEMA, PROTOCOL_SHA256, CaptureValidationError,
     _canonical, _compact, _config, _git, _now, _schema_sha, _sha,
-    validate_pauto,
+    pauto_provider_schema, validate_pauto,
 )
 from .dev_experiment import (
     LOCATION, MODEL_ID, PROJECT_ID, SDK_PACKAGE, SDK_VERSION,
@@ -43,7 +43,7 @@ def _remove_keywords(value: Any, keywords: set[str]) -> Any:
 
 def provider_variants() -> dict[str, dict[str, Any]]:
     v0 = copy.deepcopy(PAUTO_SCHEMA)
-    v1 = _remove_keywords(v0, {"minItems", "maxItems"})
+    v1 = pauto_provider_schema()
     v2 = _remove_keywords(v1, {"additionalProperties"})
     return {
         "V0": {"schema": v0, "schema_input_path": "response_json_schema"},

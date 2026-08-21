@@ -16,7 +16,7 @@ class HoldoutGuard:
 
 class Adapter:
     identifier="offline-mock"
-    def __init__(self,responses):self.responses=list(responses);self.calls=0
+    def __init__(self,responses):self.responses=list(responses);self.calls=0;self.schemas=[]
     def generate(self,*a,**k):self.calls+=1;v=self.responses.pop(0);return v if isinstance(v,ModelResponse) else ModelResponse(text=v)
     def close(self):pass
 
@@ -120,5 +120,23 @@ class DecisionPremiseCaptureTests(unittest.TestCase):
         self.assertIn(dpc.classify(self.rows(pauto="none",strength=True))["status"],{"AUTO STRUCTURAL-ONLY","AMBIGUOUS"})
     def test_transport_and_science_are_shared(self):
         self.assertEqual(dpc.run_delivery_attempts.__module__,"dr_baselines.dev_experiment");self.assertNotIn(499,dpc._transport()["retryable_statuses"]);self.assertEqual(dpc._sha(dpc.BASE_TASK_PROMPT.encode()),"2ed1e0280d3108aa9f7458bc7a21d4cf9f82ad2e6c4795d2ac516fffdb5557b1")
+
+    def test_v1_provider_schema_is_distinct_exact_and_frozen_in_prepare(self):
+        self.assertEqual(dpc._schema_sha(dpc.PAUTO_SCHEMA),dpc.PAUTO_SCIENTIFIC_SCHEMA_SHA256)
+        provider=dpc.pauto_provider_schema();self.assertEqual(dpc._schema_sha(provider),dpc.PAUTO_PROVIDER_SCHEMA_SHA256);self.assertEqual(dpc.pauto_provider_config_sha256(),dpc.PAUTO_PROVIDER_CONFIG_SHA256)
+        def paths(v,path=""):
+            out=[]
+            if isinstance(v,dict):
+                for k,x in v.items():out.extend(paths(x,path+"/"+k))
+            elif isinstance(v,list):
+                for i,x in enumerate(v):out.extend(paths(x,path+f"/{i}"))
+            return out+[path]
+        self.assertFalse(any(x.endswith(("/minItems","/maxItems")) for x in paths(provider)))
+        self.assertEqual(set(provider["properties"]),{"target_decision_id",*dpc.CATEGORIES});self.assertEqual(provider["properties"]["validity_conditions"]["items"]["properties"]["source_type"]["enum"],["observed","inferred"])
+        with self.git():manifest=dpc.prepare_sanity(self.out)
+        self.assertEqual(manifest["pauto_scientific_schema_sha256"],dpc.PAUTO_SCIENTIFIC_SCHEMA_SHA256);self.assertEqual(manifest["pauto_provider_schema_sha256"],dpc.PAUTO_PROVIDER_SCHEMA_SHA256);self.assertEqual(manifest["pauto_provider_config_sha256"],dpc.PAUTO_PROVIDER_CONFIG_SHA256)
+        path=self.out/"experiment_manifest.json";mutated=json.loads(path.read_text());mutated["pauto_provider_schema_sha256"]="bad";path.write_bytes(dpc._canonical(mutated));constructed=[]
+        with self.git(),self.assertRaises(dpc.DecisionPremiseCaptureError):dpc.execute_sanity(self.out,adapter_factory=lambda:constructed.append(True))
+        self.assertEqual(constructed,[])
 
 if __name__=="__main__":unittest.main()

@@ -35,6 +35,9 @@ PAUTO_INSTRUCTION="""Capture decision premises from the supplied pre-change snap
 PGEN_SCHEMA={"type":"object","additionalProperties":False,"required":["target_decision_id","grounded_items"],"properties":{"target_decision_id":{"type":"string"},"grounded_items":{"type":"array","maxItems":12,"items":{"type":"object","additionalProperties":False,"required":["source_path","source_text"],"properties":{"source_path":{"type":"string"},"source_text":{"type":"string"}}}}}}
 _ITEM_SCHEMA={"type":"object","additionalProperties":False,"required":["proposition","source_type","source_refs"],"properties":{"proposition":{"type":"string"},"source_type":{"type":"string","enum":["observed","inferred"]},"source_refs":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"string"}}}}
 PAUTO_SCHEMA={"type":"object","additionalProperties":False,"required":["target_decision_id",*CATEGORIES],"properties":{"target_decision_id":{"type":"string"},**{x:{"type":"array","maxItems":12,"items":_ITEM_SCHEMA} for x in CATEGORIES}}}
+PAUTO_SCIENTIFIC_SCHEMA_SHA256="4ab0c659fb4932fdd342518271661b440dd3f42e553c2307e947929de93ef5f3"
+PAUTO_PROVIDER_SCHEMA_SHA256="028c6826f305622741e8c18d60b0c8b4d81ac76c7c208f4844fbdf96a811529f"
+PAUTO_PROVIDER_CONFIG_SHA256="9d851e44e4ed7292771ec459820f037fc226e31daf09771e9afcd6b2a2b6d981"
 
 class DecisionPremiseCaptureError(RuntimeError): pass
 class CaptureValidationError(ValueError): pass
@@ -45,6 +48,19 @@ def _schema_sha(v:dict)->str:return _sha(_compact(v).encode())
 def _git(*a:str)->str:return subprocess.run(["git",*a],check=True,capture_output=True,text=True).stdout.strip()
 def _now()->str:return datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
 def protocol_sha256()->str:return _sha(PROTOCOL_PATH.read_bytes())
+def _remove_provider_item_limits(value:Any)->Any:
+    if isinstance(value,dict):return {key:_remove_provider_item_limits(item) for key,item in value.items() if key not in {"minItems","maxItems"}}
+    if isinstance(value,list):return [_remove_provider_item_limits(item) for item in value]
+    return copy.deepcopy(value)
+def pauto_provider_schema()->dict:
+    schema=_remove_provider_item_limits(PAUTO_SCHEMA)
+    if _schema_sha(PAUTO_SCHEMA)!=PAUTO_SCIENTIFIC_SCHEMA_SHA256 or _schema_sha(schema)!=PAUTO_PROVIDER_SCHEMA_SHA256:raise DecisionPremiseCaptureError("frozen PAUTO scientific/provider schema identity mismatch")
+    return schema
+def pauto_provider_config_sha256()->str:
+    value={"response_mime_type":"application/json","schema_input_path":"response_json_schema","schema":pauto_provider_schema()}
+    digest=_sha(_canonical(value))
+    if digest!=PAUTO_PROVIDER_CONFIG_SHA256:raise DecisionPremiseCaptureError("frozen PAUTO provider config identity mismatch")
+    return digest
 def _dev()->list[dict]:
     s=load_scenarios("dev")
     if tuple(x["id"] for x in s)!=DEV_IDS:raise DecisionPremiseCaptureError("DEV inventory mismatch")
@@ -168,7 +184,7 @@ def downstream_proof(scenarios:list[dict])->dict:
 
 def _config(version:str)->ExperimentConfig:return with_structured_output_metadata(ExperimentConfig(version=version,model_name=MODEL_ID,repetitions=1,dataset_id="DR-Bench",dataset_version="0.1",scenario_ids=DEV_IDS,candidate_view_contract_version="0.1",generation_config=(("delivery_policy_version",DELIVERY_POLICY_VERSION),)),True)
 def _transport()->dict:return {"sdk_attempts":TRANSPORT_ATTEMPTS,"max_delivery_attempts":MAX_DELIVERY_ATTEMPTS,"retryable_statuses":[408,429,500,502,503,504],"backoff_seconds":list(DELIVERY_BACKOFF_SECONDS),"jitter":False,"timeout_ms":TRANSPORT_TIMEOUT_MS,"timeout_seconds":TRANSPORT_TIMEOUT_SECONDS,"inter_slot_seconds":INTER_CALL_DELAY_SECONDS,"concurrency":1,"first_model_response_wins":True}
-def _manifest_common(version:str,mtype:str,plan:bytes,proof:bytes)->dict:return {"experiment_version":version,"manifest_type":mtype,"protocol_commit_sha":PROTOCOL_COMMIT,"protocol_sha256":PROTOCOL_SHA256,"implementation_commit_sha":_git("rev-parse","HEAD"),"created_at_utc":_now(),"execution_plan_sha256":_sha(plan),"snapshot_proof_sha256":_sha(proof),"pgen_prompt_sha256":_sha(PGEN_INSTRUCTION.encode()),"pauto_prompt_sha256":_sha(PAUTO_INSTRUCTION.encode()),"pgen_schema_sha256":_schema_sha(PGEN_SCHEMA),"pauto_schema_sha256":_schema_sha(PAUTO_SCHEMA),"discovery_prompt_sha256":_sha(BASE_TASK_PROMPT.encode()),"discovery_schema_sha256":_schema_sha(DISCOVERY_RESPONSE_JSON_SCHEMA),"model_id":MODEL_ID,"provider":"Google Cloud Agent Platform / Vertex","project_id":PROJECT_ID,"location":LOCATION,"sdk_package":SDK_PACKAGE,"sdk_version":SDK_VERSION,"experiment_config":_config(version).to_dict(),"transport":_transport(),"fresh_calls_required":True,"historical_response_reuse_authorized":False,"sealed_holdout_excluded":True}
+def _manifest_common(version:str,mtype:str,plan:bytes,proof:bytes)->dict:return {"experiment_version":version,"manifest_type":mtype,"protocol_commit_sha":PROTOCOL_COMMIT,"protocol_sha256":PROTOCOL_SHA256,"implementation_commit_sha":_git("rev-parse","HEAD"),"created_at_utc":_now(),"execution_plan_sha256":_sha(plan),"snapshot_proof_sha256":_sha(proof),"pgen_prompt_sha256":_sha(PGEN_INSTRUCTION.encode()),"pauto_prompt_sha256":_sha(PAUTO_INSTRUCTION.encode()),"pgen_schema_sha256":_schema_sha(PGEN_SCHEMA),"pauto_scientific_schema_sha256":_schema_sha(PAUTO_SCHEMA),"pauto_provider_schema_sha256":_schema_sha(pauto_provider_schema()),"pauto_provider_config_sha256":pauto_provider_config_sha256(),"pauto_provider_schema_compatibility":"validated V1: scientific schema minus provider-side minItems/maxItems only","discovery_prompt_sha256":_sha(BASE_TASK_PROMPT.encode()),"discovery_schema_sha256":_schema_sha(DISCOVERY_RESPONSE_JSON_SCHEMA),"model_id":MODEL_ID,"provider":"Google Cloud Agent Platform / Vertex","project_id":PROJECT_ID,"location":LOCATION,"sdk_package":SDK_PACKAGE,"sdk_version":SDK_VERSION,"experiment_config":_config(version).to_dict(),"transport":_transport(),"fresh_calls_required":True,"historical_response_reuse_authorized":False,"sealed_holdout_excluded":True}
 def _prepare_common(out:Path,full:bool)->dict:
     if out.exists():raise DecisionPremiseCaptureError("output directory already exists")
     if protocol_sha256()!=PROTOCOL_SHA256:raise DecisionPremiseCaptureError("protocol SHA mismatch")
@@ -205,7 +221,7 @@ def _validate_pre_execute(out:Path,mtype:str,version:str,plan_name="execution_pl
     expected=m["downstream_plan_sha256"] if plan_name=="downstream_plan.json" else m["execution_plan_sha256"]
     if _sha(pb)!=expected or _sha(proofb)!=m["snapshot_proof_sha256"]:raise DecisionPremiseCaptureError("plan/proof byte identity mismatch")
     if not proof.get("all_pass") or proof.get("pass_count")!=36 or proof.get("forbidden_violation_count")!=0 or len(proof.get("snapshot_proofs",[]))!=36 or not all(x.get("pass") for x in proof["snapshot_proofs"]):raise DecisionPremiseCaptureError("snapshot proof failed")
-    if m.get("pgen_prompt_sha256")!=_sha(PGEN_INSTRUCTION.encode()) or m.get("pauto_prompt_sha256")!=_sha(PAUTO_INSTRUCTION.encode()) or m.get("pgen_schema_sha256")!=_schema_sha(PGEN_SCHEMA) or m.get("pauto_schema_sha256")!=_schema_sha(PAUTO_SCHEMA):raise DecisionPremiseCaptureError("capture prompt/schema drift")
+    if m.get("pgen_prompt_sha256")!=_sha(PGEN_INSTRUCTION.encode()) or m.get("pauto_prompt_sha256")!=_sha(PAUTO_INSTRUCTION.encode()) or m.get("pgen_schema_sha256")!=_schema_sha(PGEN_SCHEMA) or m.get("pauto_scientific_schema_sha256")!=_schema_sha(PAUTO_SCHEMA) or m.get("pauto_provider_schema_sha256")!=_schema_sha(pauto_provider_schema()) or m.get("pauto_provider_config_sha256")!=pauto_provider_config_sha256():raise DecisionPremiseCaptureError("capture prompt/scientific/provider schema drift")
     if m.get("model_id")!=MODEL_ID or m.get("provider")!="Google Cloud Agent Platform / Vertex" or m.get("project_id")!=PROJECT_ID or m.get("location")!=LOCATION or m.get("transport")!=_transport() or _compact(m.get("experiment_config"))!=_compact(_config(version).to_dict()) or m.get("execute_eligible") is not True:raise DecisionPremiseCaptureError("model/config/eligibility mismatch")
     if plan_name=="downstream_plan.json":
         sp=out/"downstream_structural_proof.json"
@@ -222,7 +238,7 @@ def _execute_capture(out:Path,sanity:bool,adapter_factory:Callable[[],Any]=_dev_
     sm={(x["scenario_id"],x["target_decision"]["id"]):x for x in snaps}; adapter=adapter_factory(); valid=invalid=provider=terminal=responses=0; aborted=False
     try:
       for i,e in enumerate(plan):
-        s=sm[(e["scenario_id"],e["decision_id"])]; schema=PGEN_SCHEMA if e["condition_id"]=="PGEN" else PAUTO_SCHEMA; delivery=run_delivery_attempts(e,out/"capture_delivery_attempts.jsonl",lambda:adapter.generate(_capture_prompt(e["condition_id"],s),_config(m["experiment_version"]),response_schema=schema),sleep_fn)
+        s=sm[(e["scenario_id"],e["decision_id"])]; schema=PGEN_SCHEMA if e["condition_id"]=="PGEN" else pauto_provider_schema(); delivery=run_delivery_attempts(e,out/"capture_delivery_attempts.jsonl",lambda:adapter.generate(_capture_prompt(e["condition_id"],s),_config(m["experiment_version"]),response_schema=schema),sleep_fn)
         rec={**e,"raw_model_response":None,"canonical_payload":None,"payload_sha256":None,"validation_status":"provider_error","validation_error":None,"provider_error":None,"model_adapter":adapter.identifier}
         if delivery["result"] is None:provider+=1; err=delivery["last_error"]; rec["provider_error"]=f"{type(err).__name__}: {err}"
         else:
