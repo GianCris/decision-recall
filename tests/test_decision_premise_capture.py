@@ -1,4 +1,4 @@
-import copy, json, tempfile, unittest
+import copy, json, shutil, tempfile, unittest
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -24,12 +24,16 @@ class DecisionPremiseCaptureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):cls.scenarios=catalog.load_scenarios("dev");cls.snapshots=dpc.build_snapshots(cls.scenarios)
     def setUp(self):self.t=tempfile.TemporaryDirectory();self.addCleanup(self.t.cleanup);self.out=Path(self.t.name)/"out"
-    def git(self):return patch.object(dpc,"_git",side_effect=lambda *a:"implementation" if a[:2]==("rev-parse","HEAD") else "")
+    def git(self):return patch.object(dpc,"_git",side_effect=lambda *a:dpc.PASSED_SANITY_IMPLEMENTATION_SHA if a[:2]==("rev-parse","HEAD") else "")
     def passed_sanity(self):
         sanity=Path(self.t.name)/"sanity"
         with self.git():dpc.prepare_sanity(sanity)
-        (sanity/"capture_runs.jsonl").write_text("".join(json.dumps({"validation_status":"valid"})+"\n" for _ in range(4)))
-        (sanity/"capture_summary.json").write_text(json.dumps({"status":"PASS","planned":4,"terminal":4,"model_responses":4,"valid":4,"invalid":0,"provider_failures":0,"aborted":False}))
+        plan=json.loads((sanity/"execution_plan.json").read_text());snaps=json.loads((sanity/"snapshots.json").read_text());sm={(x["scenario_id"],x["target_decision"]["id"]):x for x in snaps}
+        runs=[]
+        for x in plan:
+            snap=sm[(x["scenario_id"],x["decision_id"])];payload={"target_decision_id":x["decision_id"],"grounded_items":[]} if x["condition_id"]=="PGEN" else {"target_decision_id":x["decision_id"],**{c:[] for c in dpc.CATEGORIES}};canonical,_=(dpc.validate_pgen(payload,snap) if x["condition_id"]=="PGEN" else dpc.validate_pauto(payload,snap));runs.append({**x,"validation_status":"valid","raw_model_response":dpc._compact(payload),"provider_error":None,"canonical_payload":canonical,"payload_sha256":dpc._sha(dpc._canonical(canonical))})
+        (sanity/"capture_runs.jsonl").write_text("".join(json.dumps(x)+"\n" for x in runs))
+        (sanity/"capture_summary.json").write_text(json.dumps({"experiment_version":dpc.SANITY_VERSION,"status":"PASS","planned":4,"terminal":4,"model_responses":4,"valid":4,"invalid":0,"provider_failures":0,"aborted":False,"downstream_eligible":False}))
         return sanity
     def test_snapshot_contract_all_36_timing_exclusions_and_hashes(self):
         snaps,proof=dpc.audit_snapshots();self.assertEqual(len(snaps),36);self.assertEqual(proof["pass_count"],36);self.assertTrue(proof["all_pass"])
@@ -78,8 +82,45 @@ class DecisionPremiseCaptureTests(unittest.TestCase):
         sanity=self.passed_sanity()
         with self.git():m=dpc.prepare_full(self.out,sanity)
         self.assertEqual((m["capture_slots"],m["downstream_slots"]),(72,48));self.assertFalse(m["downstream_eligible"]);self.assertEqual(m["manifest_type"],dpc.FULL_MANIFEST)
-        self.assertFalse(m["sanity_gate"]["artifacts_reused"])
+        self.assertFalse(m["sanity_authentication"]["artifacts_reused"]);self.assertEqual(m["sanity_authentication"]["implementation_commit_sha"],dpc.PASSED_SANITY_IMPLEMENTATION_SHA)
         with self.assertRaises(dpc.DecisionPremiseCaptureError):dpc._validate_pre_execute(self.out,dpc.SANITY_MANIFEST,dpc.SANITY_VERSION)
+    def test_full_prepare_authenticates_exact_sanity_artifacts(self):
+        base=self.passed_sanity()
+        with self.git():evidence=dpc._require_passed_sanity(base)
+        self.assertEqual((evidence["slot_count"],evidence["valid"],evidence["sealed_holdout_accesses"]),(4,4,0));self.assertFalse(evidence["artifact_reuse_authorized"])
+        def mutate(name,fn):
+            target=Path(self.t.name)/name;shutil.copytree(base,target);fn(target)
+            with self.git(),self.assertRaises(dpc.DecisionPremiseCaptureError):dpc.prepare_full(Path(self.t.name)/(name+"-out"),target)
+        mutate("wrong-plan",lambda p:(p/"execution_plan.json").write_bytes((p/"execution_plan.json").read_bytes()+b" "))
+        def wrong_slot(p):
+            rows=json.loads((p/"execution_plan.json").read_text());rows[0]["scenario_id"]="dev-002";(p/"execution_plan.json").write_bytes(dpc._canonical(rows));m=json.loads((p/"experiment_manifest.json").read_text());m["execution_plan_sha256"]=dpc._sha((p/"execution_plan.json").read_bytes());(p/"experiment_manifest.json").write_bytes(dpc._canonical(m))
+        mutate("wrong-slot",wrong_slot)
+        def bad_manifest(field,value):
+            return lambda p:(lambda m:((m.__setitem__(field,value)),(p/"experiment_manifest.json").write_bytes(dpc._canonical(m))))(json.loads((p/"experiment_manifest.json").read_text()))
+        for field,value in (("protocol_sha256","bad"),("implementation_commit_sha","bad"),("pauto_scientific_schema_sha256","bad"),("pauto_provider_schema_sha256","bad"),("pauto_provider_config_sha256","bad"),("pgen_schema_sha256","bad"),("pgen_prompt_sha256","bad")):
+            mutate("bad-"+field,bad_manifest(field,value))
+        mutate("bad-proof",lambda p:(p/"snapshot_proof.json").write_bytes((p/"snapshot_proof.json").read_bytes()+b" "))
+        def bad_summary(p):
+            s=json.loads((p/"capture_summary.json").read_text());s["provider_failures"]=1;s["status"]="INCOMPLETE";(p/"capture_summary.json").write_bytes(dpc._canonical(s))
+        mutate("bad-summary",bad_summary)
+    def _complete_capture_fixture(self):
+        sanity=self.passed_sanity()
+        with self.git():dpc.prepare_full(self.out,sanity)
+        plan=json.loads((self.out/"execution_plan.json").read_text());snaps=json.loads((self.out/"snapshots.json").read_text());sm={(x["scenario_id"],x["target_decision"]["id"]):x for x in snaps};runs=[]
+        for e in plan:
+            payload={"target_decision_id":e["decision_id"],"grounded_items":[]} if e["condition_id"]=="PGEN" else {"target_decision_id":e["decision_id"],**{x:[] for x in dpc.CATEGORIES}}
+            canonical,_=(dpc.validate_pgen(payload,sm[(e["scenario_id"],e["decision_id"])]) if e["condition_id"]=="PGEN" else dpc.validate_pauto(payload,sm[(e["scenario_id"],e["decision_id"])]))
+            runs.append({**e,"canonical_payload":canonical,"payload_sha256":dpc._sha(dpc._canonical(canonical)),"validation_status":"valid","provider_error":None})
+        (self.out/"capture_runs.jsonl").write_text("".join(dpc._compact(x)+"\n" for x in runs));(self.out/"capture_summary.json").write_bytes(dpc._canonical({"experiment_version":dpc.FULL_VERSION,"planned":72,"terminal":72,"model_responses":72,"valid":72,"invalid":0,"provider_failures":0,"aborted":False,"missing_expected_capture_slots":0,"unexpected_capture_slots":0,"duplicate_capture_slots":0,"all_canonical_artifact_hashes_verify":True,"status":"CAPTURE COMPLETE","downstream_eligible":True}));return runs
+    def test_exact_capture_set_and_pre_adapter_downstream_gate(self):
+        runs=self._complete_capture_fixture();self.assertEqual(len(dpc._capture_artifacts(self.out)),72);constructed=[]
+        rows=copy.deepcopy(runs);rows[-1]["scenario_id"]="dev-999";(self.out/"capture_runs.jsonl").write_text("".join(dpc._compact(x)+"\n" for x in rows))
+        with self.git(),self.assertRaises(dpc.DecisionPremiseCaptureError):dpc.execute_downstream(self.out,adapter_factory=lambda:constructed.append(True))
+        self.assertEqual(constructed,[])
+        (self.out/"capture_runs.jsonl").write_text("".join(dpc._compact(x)+"\n" for x in runs[:-1]))
+        with self.assertRaises(dpc.DecisionPremiseCaptureError):dpc._capture_artifacts(self.out)
+    def test_contrast_details_and_strength_is_secondary(self):
+        rows=self.rows();c=dpc._contrast(rows["P0"],rows["PAUTO"]);self.assertIn("corrections",c);self.assertIn("regressions",c);self.assertTrue(c["dependency_strength_secondary_only"]);self.assertEqual(dpc.classify(self.rows(oracle=False))["status"],"NO CONTEMPORARY PREMISE ADVANTAGE")
     def test_execute_integrity_fails_before_adapter(self):
         with self.git():dpc.prepare_sanity(self.out)
         constructed=[]

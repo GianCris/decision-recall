@@ -25,6 +25,7 @@ PROTOCOL_COMMIT="49991bf6bc9f9cbecb8bd981ccaacb1974bbd861"
 PROTOCOL_SHA256="7beac6d4d9aa75dc83dbff5aa86bd4c8f942a6f9de89879eb12f707fb3c413cd"
 SANITY_VERSION="decision-premise-capture-sanity-v0.1"; FULL_VERSION="decision-premise-capture-v0.1"
 SANITY_MANIFEST="decision-premise-capture-sanity-manifest-v0.1"; FULL_MANIFEST="decision-premise-capture-manifest-v0.1"
+PASSED_SANITY_IMPLEMENTATION_SHA="a97ca5240327bb3cd5519d28f2f08e7564582e5d"
 DEV_IDS=tuple(f"dev-{i:03d}" for i in range(1,13)); CAPTURE_CONDITIONS=("PGEN","PAUTO")
 DOWNSTREAM_CONDITIONS=("P0","PGEN","PAUTO","PORACLE"); CATEGORIES=("validity_conditions","independent_reasons","constraints","expectations")
 MAX_CAPTURE_ITEMS_PER_DECISION=12; MAX_SOURCE_REFS_PER_ITEM=6
@@ -150,11 +151,13 @@ def select_sanity(snaps:list[dict])->tuple[dict,dict]:
 def sanity_plan(snaps:list[dict])->list[dict]:
     a,b=select_sanity(snaps); pairs=((a,"PGEN"),(a,"PAUTO"),(b,"PAUTO"),(b,"PGEN"))
     return [{"global_execution_index":i,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(visible_snapshot(s)))} for i,(s,c) in enumerate(pairs,1)]
+def _capture_slot_key(x:dict)->tuple:return (x.get("scenario_id"),x.get("decision_id"),x.get("condition_id"),x.get("repetition_id"),x.get("snapshot_sha256"))
+def _downstream_slot_key(x:dict)->tuple:return (x.get("scenario_id"),x.get("condition_id"),x.get("repetition_id"))
 def capture_plan(snaps:list[dict])->list[dict]:
     out=[]
     for n,s in enumerate(sorted(snaps,key=lambda x:(x["scenario_id"],x["target_decision"]["id"])),1):
         order=("PGEN","PAUTO") if n%2 else ("PAUTO","PGEN")
-        for c in order:out.append({"global_execution_index":len(out)+1,"snapshot_index":n,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(visible_snapshot(s)))})
+        for c in order:out.append({"global_execution_index":len(out)+1,"snapshot_index":n,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"repetition_id":"1","observation_kind":"capture","snapshot_sha256":_sha(_canonical(visible_snapshot(s)))})
     return out
 def downstream_plan()->list[dict]:
     rows=(("P0","PGEN","PAUTO","PORACLE"),("PGEN","PAUTO","PORACLE","P0"),("PAUTO","PORACLE","P0","PGEN"),("PORACLE","P0","PGEN","PAUTO")); out=[]
@@ -166,10 +169,13 @@ def validate_sanity_plan(p:list[dict]):
 def validate_capture_plan(p:list[dict]):
     if len(p)!=72 or Counter(x["condition_id"] for x in p)!=Counter({"PGEN":36,"PAUTO":36}):raise DecisionPremiseCaptureError("invalid capture plan")
     if sum(p[i]["condition_id"]=="PGEN" for i in range(0,72,2))!=18:raise DecisionPremiseCaptureError("capture first-order imbalance")
+    if len({_capture_slot_key(x) for x in p})!=72 or any(x.get("repetition_id")!="1" for x in p):raise DecisionPremiseCaptureError("invalid capture slot identity")
+    if Counter((x["scenario_id"],x["decision_id"]) for x in p)!=Counter({(sid,f"d{i}"):2 for sid in DEV_IDS for i in range(1,4)}):raise DecisionPremiseCaptureError("invalid capture scenario/decision coverage")
 def validate_downstream_plan(p:list[dict]):
     if len(p)!=48 or Counter(x["condition_id"] for x in p)!=Counter({x:12 for x in DOWNSTREAM_CONDITIONS}):raise DecisionPremiseCaptureError("invalid downstream plan")
     for c in DOWNSTREAM_CONDITIONS:
         if Counter(x["temporal_position"] for x in p if x["condition_id"]==c)!=Counter({1:3,2:3,3:3,4:3}):raise DecisionPremiseCaptureError("downstream temporal imbalance")
+    if len({_downstream_slot_key(x) for x in p})!=48 or Counter(x["scenario_id"] for x in p)!=Counter({x:4 for x in DEV_IDS}) or any(x.get("repetition_id")!="1" for x in p):raise DecisionPremiseCaptureError("invalid downstream slot identity")
 
 def normalized_base(s:dict)->dict:
     v=candidate_view(s,"discovery","implicit"); v.pop("discovery_condition"); return v
@@ -190,40 +196,59 @@ def _prepare_common(out:Path,full:bool)->dict:
     if protocol_sha256()!=PROTOCOL_SHA256:raise DecisionPremiseCaptureError("protocol SHA mismatch")
     if _git("status","--porcelain","--untracked-files=no"):raise DecisionPremiseCaptureError("tracked worktree must be clean")
     snaps,proof=audit_snapshots(); plan=capture_plan(snaps) if full else sanity_plan(snaps); validate_capture_plan(plan) if full else validate_sanity_plan(plan)
-    proof_bytes=_canonical(proof); plan_bytes=_canonical(plan); version=FULL_VERSION if full else SANITY_VERSION; mtype=FULL_MANIFEST if full else SANITY_MANIFEST
-    manifest=_manifest_common(version,mtype,plan_bytes,proof_bytes); manifest.update({"prepare_status":"PREPARED" if proof["all_pass"] else "BLOCKED","execute_eligible":proof["all_pass"],"snapshot_count":36,"snapshot_pass_count":proof["pass_count"],"sanity_artifact_reuse_forbidden":True})
+    proof_bytes=_canonical(proof); plan_bytes=_canonical(plan); snapshot_bytes=_canonical(snaps); version=FULL_VERSION if full else SANITY_VERSION; mtype=FULL_MANIFEST if full else SANITY_MANIFEST
+    manifest=_manifest_common(version,mtype,plan_bytes,proof_bytes); manifest.update({"prepare_status":"PREPARED" if proof["all_pass"] else "BLOCKED","execute_eligible":proof["all_pass"],"snapshot_count":36,"snapshot_pass_count":proof["pass_count"],"snapshots_sha256":_sha(snapshot_bytes),"sanity_artifact_reuse_forbidden":True})
     if full:
         dp=downstream_plan(); validate_downstream_plan(dp); sp=downstream_proof(_dev()); dpb=_canonical(dp); spb=_canonical(sp)
-        manifest.update({"capture_slots":72,"downstream_slots":48,"downstream_plan_sha256":_sha(dpb),"downstream_proof_sha256":_sha(spb),"downstream_eligible":False,"analysis_version":"decision-premise-capture-analysis-v0.1"})
+        manifest.update({"capture_slots":72,"expected_capture_slot_count":72,"capture_condition_counts":{"PGEN":36,"PAUTO":36},"downstream_slots":48,"expected_downstream_slot_count":48,"downstream_condition_counts":{x:12 for x in DOWNSTREAM_CONDITIONS},"downstream_plan_sha256":_sha(dpb),"downstream_proof_sha256":_sha(spb),"capture_execute_eligible":proof["all_pass"],"downstream_execute_eligible":False,"downstream_eligible":False,"analysis_version":"decision-premise-capture-analysis-v0.1"})
     else:
         s1,s2=select_sanity(snaps); manifest.update({"planned_scientific_observations":4,"s1":{"scenario_id":s1["scenario_id"],"decision_id":s1["target_decision"]["id"]},"s2":{"scenario_id":s2["scenario_id"],"decision_id":s2["target_decision"]["id"]},"pass_rule":"4/4 terminal model responses valid; zero provider failures; no abort","downstream_present":False})
-    out.mkdir(); (out/"execution_plan.json").write_bytes(plan_bytes); (out/"snapshot_proof.json").write_bytes(proof_bytes); (out/"snapshots.json").write_bytes(_canonical(snaps))
+    out.mkdir(); (out/"execution_plan.json").write_bytes(plan_bytes); (out/"snapshot_proof.json").write_bytes(proof_bytes); (out/"snapshots.json").write_bytes(snapshot_bytes)
     if full:(out/"downstream_plan.json").write_bytes(dpb); (out/"downstream_structural_proof.json").write_bytes(spb)
     (out/"experiment_manifest.json").write_bytes(_canonical(manifest)); return manifest
 def prepare_sanity(out:Path)->dict:return _prepare_common(out,False)
-def _require_passed_sanity(sanity_dir:Path)->None:
-    mp=sanity_dir/"experiment_manifest.json"; sp=sanity_dir/"capture_summary.json"; rp=sanity_dir/"capture_runs.jsonl"
-    if not all(x.exists() for x in (mp,sp,rp)):raise DecisionPremiseCaptureError("separately passed sanity evidence required")
-    manifest=json.loads(mp.read_text()); summary=json.loads(sp.read_text()); runs=[json.loads(x) for x in rp.read_text().splitlines() if x]
-    if manifest.get("manifest_type")!=SANITY_MANIFEST or manifest.get("experiment_version")!=SANITY_VERSION or summary.get("status")!="PASS" or summary.get("planned")!=4 or summary.get("terminal")!=4 or summary.get("model_responses")!=4 or summary.get("valid")!=4 or summary.get("invalid") or summary.get("provider_failures") or summary.get("aborted") or len(runs)!=4 or any(x.get("validation_status")!="valid" for x in runs):raise DecisionPremiseCaptureError("sanity did not satisfy frozen 4/4 PASS gate")
+def _require_passed_sanity(sanity_dir:Path)->dict:
+    paths={n:sanity_dir/n for n in ("experiment_manifest.json","execution_plan.json","snapshot_proof.json","snapshots.json","capture_summary.json","capture_runs.jsonl")}
+    if not all(x.exists() for x in paths.values()):raise DecisionPremiseCaptureError("separately passed sanity evidence required")
+    manifest=json.loads(paths["experiment_manifest.json"].read_text()); plan_bytes=paths["execution_plan.json"].read_bytes(); plan=json.loads(plan_bytes); proof_bytes=paths["snapshot_proof.json"].read_bytes(); proof=json.loads(proof_bytes); snapshots=json.loads(paths["snapshots.json"].read_text()); summary=json.loads(paths["capture_summary.json"].read_text()); runs=[json.loads(x) for x in paths["capture_runs.jsonl"].read_text().splitlines() if x]
+    frozen=[("dev-001","d1","PGEN"),("dev-001","d1","PAUTO"),("dev-006","d3","PAUTO"),("dev-006","d3","PGEN")]
+    slots=[(x.get("scenario_id"),x.get("decision_id"),x.get("condition_id")) for x in plan]; run_slots=[(x.get("scenario_id"),x.get("decision_id"),x.get("condition_id")) for x in runs]
+    identity=(manifest.get("manifest_type")==SANITY_MANIFEST and manifest.get("experiment_version")==SANITY_VERSION and manifest.get("protocol_sha256")==PROTOCOL_SHA256 and manifest.get("implementation_commit_sha")==PASSED_SANITY_IMPLEMENTATION_SHA and manifest.get("prepare_status")=="PREPARED" and manifest.get("execute_eligible") is True and manifest.get("fresh_calls_required") is True and manifest.get("historical_response_reuse_authorized") is False and manifest.get("sanity_artifact_reuse_forbidden") is True)
+    hashes=(_sha(plan_bytes)==manifest.get("execution_plan_sha256") and _sha(proof_bytes)==manifest.get("snapshot_proof_sha256"))
+    proof_ok=(proof.get("all_pass") is True and proof.get("snapshot_count")==proof.get("pass_count")==36 and proof.get("forbidden_violation_count")==0 and proof.get("dev_only") is True and len(proof.get("snapshot_proofs",[]))==36 and all(x.get("pass") and x.get("dev_only_loader") and not x.get("forbidden_fields_found") for x in proof["snapshot_proofs"]))
+    scientific=(manifest.get("pgen_prompt_sha256")==_sha(PGEN_INSTRUCTION.encode()) and manifest.get("pgen_schema_sha256")==_schema_sha(PGEN_SCHEMA) and manifest.get("pauto_prompt_sha256")==_sha(PAUTO_INSTRUCTION.encode()) and manifest.get("pauto_scientific_schema_sha256")==PAUTO_SCIENTIFIC_SCHEMA_SHA256 and manifest.get("pauto_provider_schema_sha256")==PAUTO_PROVIDER_SCHEMA_SHA256 and manifest.get("pauto_provider_config_sha256")==PAUTO_PROVIDER_CONFIG_SHA256 and manifest.get("model_id")==MODEL_ID and manifest.get("provider")=="Google Cloud Agent Platform / Vertex" and manifest.get("project_id")==PROJECT_ID and manifest.get("location")==LOCATION and manifest.get("transport")==_transport() and _compact(manifest.get("experiment_config"))==_compact(_config(SANITY_VERSION).to_dict()))
+    sm={(x["scenario_id"],x["target_decision"]["id"]):x for x in snapshots}; payloads_ok=True
+    try:
+        for x in runs:
+            canonical,_=(validate_pgen(x["canonical_payload"],sm[(x["scenario_id"],x["decision_id"])]) if x["condition_id"]=="PGEN" else validate_pauto(x["canonical_payload"],sm[(x["scenario_id"],x["decision_id"])]))
+            payloads_ok &= canonical==x["canonical_payload"] and _sha(_canonical(canonical))==x.get("payload_sha256") and x.get("snapshot_sha256")==_sha(_canonical(visible_snapshot(sm[(x["scenario_id"],x["decision_id"])])))
+    except (KeyError,TypeError,CaptureValidationError):payloads_ok=False
+    outcome=(summary=={"experiment_version":SANITY_VERSION,"planned":4,"terminal":4,"model_responses":4,"valid":4,"invalid":0,"provider_failures":0,"aborted":False,"status":"PASS","downstream_eligible":False} and slots==frozen and run_slots==frozen and len(set(run_slots))==4 and payloads_ok and all(x.get("validation_status")=="valid" and x.get("raw_model_response") is not None and x.get("provider_error") is None for x in runs))
+    if not all((identity,hashes,proof_ok,scientific,outcome)):raise DecisionPremiseCaptureError("sanity did not satisfy authenticated frozen 4/4 PASS gate")
+    return {"source_directory":str(sanity_dir),"status":"PASS","manifest_type":SANITY_MANIFEST,"experiment_version":SANITY_VERSION,"implementation_commit_sha":PASSED_SANITY_IMPLEMENTATION_SHA,"protocol_sha256":PROTOCOL_SHA256,"execution_plan_sha256":manifest["execution_plan_sha256"],"snapshot_proof_sha256":manifest["snapshot_proof_sha256"],"slot_count":4,"model_responses":4,"valid":4,"invalid":0,"provider_failures":0,"aborted":False,"snapshot_pass_count":36,"forbidden_field_violations":0,"sealed_holdout_accesses":0,"artifacts_reused":False,"artifact_reuse_authorized":False}
 def prepare_full(out:Path,sanity_dir:Path)->dict:
-    _require_passed_sanity(sanity_dir)
-    manifest=_prepare_common(out,True);manifest["sanity_gate"]={"source_directory":str(sanity_dir),"status":"PASS","artifacts_reused":False};(out/"experiment_manifest.json").write_bytes(_canonical(manifest));return manifest
+    sanity_evidence=_require_passed_sanity(sanity_dir)
+    manifest=_prepare_common(out,True);manifest["sanity_authentication"]=sanity_evidence;(out/"experiment_manifest.json").write_bytes(_canonical(manifest));return manifest
 
 def _validate_pre_execute(out:Path,mtype:str,version:str,plan_name="execution_plan.json",runtime_integrity:bool=True)->tuple[dict,list,dict]:
-    mp=out/"experiment_manifest.json"; pp=out/plan_name; proofp=out/"snapshot_proof.json"
-    if not all(x.exists() for x in (mp,pp,proofp)):raise DecisionPremiseCaptureError("prepared artifacts required")
+    mp=out/"experiment_manifest.json"; pp=out/plan_name; proofp=out/"snapshot_proof.json"; snapshotp=out/"snapshots.json"
+    if not all(x.exists() for x in (mp,pp,proofp,snapshotp)):raise DecisionPremiseCaptureError("prepared artifacts required")
     m=json.loads(mp.read_text()); pb=pp.read_bytes(); proofb=proofp.read_bytes(); plan=json.loads(pb); proof=json.loads(proofb)
     if m.get("manifest_type")!=mtype or m.get("experiment_version")!=version or m.get("protocol_commit_sha")!=PROTOCOL_COMMIT or m.get("protocol_sha256")!=PROTOCOL_SHA256:raise DecisionPremiseCaptureError("incompatible lifecycle manifest")
     if runtime_integrity:
         if protocol_sha256()!=m.get("protocol_sha256") or protocol_sha256()!=PROTOCOL_SHA256:raise DecisionPremiseCaptureError("protocol drift")
         if _git("rev-parse","HEAD")!=m.get("implementation_commit_sha") or _git("status","--porcelain","--untracked-files=no"):raise DecisionPremiseCaptureError("implementation/worktree drift")
     expected=m["downstream_plan_sha256"] if plan_name=="downstream_plan.json" else m["execution_plan_sha256"]
-    if _sha(pb)!=expected or _sha(proofb)!=m["snapshot_proof_sha256"]:raise DecisionPremiseCaptureError("plan/proof byte identity mismatch")
+    if _sha(pb)!=expected or _sha(proofb)!=m["snapshot_proof_sha256"] or _sha(snapshotp.read_bytes())!=m.get("snapshots_sha256"):raise DecisionPremiseCaptureError("plan/proof/snapshot byte identity mismatch")
     if not proof.get("all_pass") or proof.get("pass_count")!=36 or proof.get("forbidden_violation_count")!=0 or len(proof.get("snapshot_proofs",[]))!=36 or not all(x.get("pass") for x in proof["snapshot_proofs"]):raise DecisionPremiseCaptureError("snapshot proof failed")
     if m.get("pgen_prompt_sha256")!=_sha(PGEN_INSTRUCTION.encode()) or m.get("pauto_prompt_sha256")!=_sha(PAUTO_INSTRUCTION.encode()) or m.get("pgen_schema_sha256")!=_schema_sha(PGEN_SCHEMA) or m.get("pauto_scientific_schema_sha256")!=_schema_sha(PAUTO_SCHEMA) or m.get("pauto_provider_schema_sha256")!=_schema_sha(pauto_provider_schema()) or m.get("pauto_provider_config_sha256")!=pauto_provider_config_sha256():raise DecisionPremiseCaptureError("capture prompt/scientific/provider schema drift")
-    if m.get("model_id")!=MODEL_ID or m.get("provider")!="Google Cloud Agent Platform / Vertex" or m.get("project_id")!=PROJECT_ID or m.get("location")!=LOCATION or m.get("transport")!=_transport() or _compact(m.get("experiment_config"))!=_compact(_config(version).to_dict()) or m.get("execute_eligible") is not True:raise DecisionPremiseCaptureError("model/config/eligibility mismatch")
+    eligible=m.get("capture_execute_eligible") if version==FULL_VERSION else m.get("execute_eligible")
+    if m.get("model_id")!=MODEL_ID or m.get("provider")!="Google Cloud Agent Platform / Vertex" or m.get("project_id")!=PROJECT_ID or m.get("location")!=LOCATION or m.get("transport")!=_transport() or _compact(m.get("experiment_config"))!=_compact(_config(version).to_dict()) or m.get("prepare_status")!="PREPARED" or eligible is not True or m.get("fresh_calls_required") is not True or m.get("historical_response_reuse_authorized") is not False or m.get("sealed_holdout_excluded") is not True:raise DecisionPremiseCaptureError("model/config/eligibility mismatch")
+    if version==FULL_VERSION:
+        auth=m.get("sanity_authentication",{})
+        if auth.get("status")!="PASS" or auth.get("implementation_commit_sha")!=PASSED_SANITY_IMPLEMENTATION_SHA or auth.get("slot_count")!=4 or auth.get("valid")!=4 or auth.get("provider_failures")!=0 or auth.get("artifacts_reused") is not False or auth.get("artifact_reuse_authorized") is not False:raise DecisionPremiseCaptureError("successful sanity authentication missing")
     if plan_name=="downstream_plan.json":
+        if m.get("discovery_prompt_sha256")!=_sha(BASE_TASK_PROMPT.encode()) or m.get("discovery_prompt_sha256")!="2ed1e0280d3108aa9f7458bc7a21d4cf9f82ad2e6c4795d2ac516fffdb5557b1" or m.get("discovery_schema_sha256")!=_schema_sha(DISCOVERY_RESPONSE_JSON_SCHEMA) or m.get("discovery_schema_sha256")!="c1da8e87a79950b25c57bfdd411a44c6482ec15cbadeca69b6019e7fbda52ce5":raise DecisionPremiseCaptureError("Discovery prompt/schema drift")
         sp=out/"downstream_structural_proof.json"
         if not sp.exists() or _sha(sp.read_bytes())!=m.get("downstream_proof_sha256"):raise DecisionPremiseCaptureError("downstream structural-proof identity mismatch")
         structure=json.loads(sp.read_text())
@@ -250,20 +275,29 @@ def _execute_capture(out:Path,sanity:bool,adapter_factory:Callable[[],Any]=_dev_
         if i<len(plan)-1:sleep_fn(INTER_CALL_DELAY_SECONDS)
     except KeyboardInterrupt:aborted=True
     finally:adapter.close()
-    complete=(terminal==len(plan) and responses==len(plan) and valid==len(plan) and invalid==provider==0 and not aborted)
-    summary={"experiment_version":m["experiment_version"],"planned":len(plan),"terminal":terminal,"model_responses":responses,"valid":valid,"invalid":invalid,"provider_failures":provider,"aborted":aborted,"status":"PASS" if sanity and complete else "CAPTURE COMPLETE" if complete else "ABORTED" if aborted else "INCOMPLETE","downstream_eligible":complete and not sanity}
+    runs=[json.loads(x) for x in (out/"capture_runs.jsonl").read_text().splitlines() if x]; keys=[_capture_slot_key(x) for x in runs] if not sanity else []
+    expected={_capture_slot_key(x) for x in plan} if not sanity else set(); actual=set(keys); duplicates=len(keys)-len(actual); missing=len(expected-actual); unexpected=len(actual-expected)
+    hashes_ok=all(x.get("canonical_payload") is not None and _sha(_canonical(x["canonical_payload"]))==x.get("payload_sha256") for x in runs if x.get("validation_status")=="valid")
+    complete=(terminal==len(plan) and responses==len(plan) and valid==len(plan) and invalid==provider==0 and not aborted and (sanity or (len(plan)==72 and len(actual)==72 and not duplicates and not missing and not unexpected and hashes_ok)))
+    summary={"experiment_version":m["experiment_version"],"planned":len(plan),"terminal":terminal,"model_responses":responses,"valid":valid,"invalid":invalid,"provider_failures":provider,"aborted":aborted,"missing_expected_capture_slots":missing,"unexpected_capture_slots":unexpected,"duplicate_capture_slots":duplicates,"all_canonical_artifact_hashes_verify":hashes_ok,"status":"PASS" if sanity and complete else "CAPTURE COMPLETE" if complete else "ABORTED" if aborted else "INCOMPLETE","downstream_eligible":complete and not sanity}
     (out/"capture_summary.json").write_bytes(_canonical(summary)); return summary
 def execute_sanity(out:Path,**kw)->dict:return _execute_capture(out,True,**kw)
 def execute_capture(out:Path,**kw)->dict:return _execute_capture(out,False,**kw)
 
 def _capture_artifacts(out:Path)->dict:
-    summary=json.loads((out/"capture_summary.json").read_text()); runs=[json.loads(x) for x in (out/"capture_runs.jsonl").read_text().splitlines() if x]
-    if summary.get("downstream_eligible") is not True or len(runs)!=72 or any(x["validation_status"]!="valid" for x in runs):raise DecisionPremiseCaptureError("72/72 valid frozen captures required")
+    summary=json.loads((out/"capture_summary.json").read_text()); runs=[json.loads(x) for x in (out/"capture_runs.jsonl").read_text().splitlines() if x]; plan=json.loads((out/"execution_plan.json").read_text()); snaps=json.loads((out/"snapshots.json").read_text())
+    expected={_capture_slot_key(x) for x in plan}; keys=[_capture_slot_key(x) for x in runs]; actual=set(keys)
+    if len(plan)!=72 or len(expected)!=72 or len(runs)!=72 or len(keys)!=len(actual) or actual!=expected:raise DecisionPremiseCaptureError("exact 72-slot capture identity mismatch")
+    required={"planned":72,"terminal":72,"model_responses":72,"valid":72,"invalid":0,"provider_failures":0,"aborted":False,"missing_expected_capture_slots":0,"unexpected_capture_slots":0,"duplicate_capture_slots":0,"all_canonical_artifact_hashes_verify":True,"downstream_eligible":True}
+    if any(summary.get(k)!=v for k,v in required.items()) or any(x.get("validation_status")!="valid" or x.get("provider_error") is not None for x in runs):raise DecisionPremiseCaptureError("72/72 valid frozen captures required")
+    sm={(x["scenario_id"],x["target_decision"]["id"]):x for x in snaps}
     result={}
     for x in runs:
         key=(x["scenario_id"],x["decision_id"],x["condition_id"])
         if key in result or _sha(_canonical(x["canonical_payload"]))!=x["payload_sha256"]:raise DecisionPremiseCaptureError("capture uniqueness/hash failure")
-        result[key]=x["canonical_payload"]
+        snap=sm.get((x["scenario_id"],x["decision_id"])); canonical,_=(validate_pgen(x["canonical_payload"],snap) if x["condition_id"]=="PGEN" else validate_pauto(x["canonical_payload"],snap))
+        if canonical!=x["canonical_payload"] or x["canonical_payload"].get("target_decision_id")!=x["decision_id"]:raise DecisionPremiseCaptureError("capture condition/target/validator mismatch")
+        result[key]=copy.deepcopy(x["canonical_payload"])
     if len(result)!=72:raise DecisionPremiseCaptureError("capture coverage failure")
     return result
 def context_bundle(s:dict,c:str,artifacts:dict)->dict:
@@ -277,10 +311,13 @@ def _downstream_prompt(base:dict,bundle:dict)->str:return BASE_TASK_PROMPT+"\n\n
 def execute_downstream(out:Path,adapter_factory:Callable[[],Any]=_dev_adapter_factory,sleep_fn:Callable[[float],None]=sleep)->dict:
     m,plan,_=_validate_pre_execute(out,FULL_MANIFEST,FULL_VERSION,"downstream_plan.json"); artifacts=_capture_artifacts(out)
     if (out/"downstream_runs.jsonl").exists():raise DecisionPremiseCaptureError("existing downstream execution prohibits re-execution")
-    scenarios={x["id"]:x for x in _dev()}; adapter=adapter_factory(); terminal=valid=invalid=provider=0; aborted=False
+    scenarios={x["id"]:x for x in _dev()}; prepared={}
+    for e in plan:
+        s=scenarios[e["scenario_id"]]; base=normalized_base(s); bundle=context_bundle(s,e["condition_id"],artifacts); prepared[e["global_execution_index"]]=(s,base,bundle)
+    adapter=adapter_factory(); terminal=valid=invalid=provider=0; aborted=False
     try:
       for i,e in enumerate(plan):
-        s=scenarios[e["scenario_id"]]; base=normalized_base(s); bundle=context_bundle(s,e["condition_id"],artifacts); delivery=run_delivery_attempts(e,out/"downstream_delivery_attempts.jsonl",lambda:adapter.generate(_downstream_prompt(base,bundle),_config(FULL_VERSION),response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA),sleep_fn); rec={**e,"raw_model_response":None,"parsed_candidate_response":None,"validation_status":"provider_error","provider_error":None,"context_bundle_sha256":_sha(_canonical(bundle))}
+        s,base,bundle=prepared[e["global_execution_index"]]; delivery=run_delivery_attempts(e,out/"downstream_delivery_attempts.jsonl",lambda:adapter.generate(_downstream_prompt(base,bundle),_config(FULL_VERSION),response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA),sleep_fn); rec={**e,"raw_model_response":None,"parsed_candidate_response":None,"validation_status":"provider_error","provider_error":None,"context_bundle_sha256":_sha(_canonical(bundle))}
         if delivery["result"] is None:provider+=1;err=delivery["last_error"];rec["provider_error"]=f"{type(err).__name__}: {err}"
         else:
           rec["raw_model_response"]=delivery["result"].text
@@ -290,7 +327,9 @@ def execute_downstream(out:Path,adapter_factory:Callable[[],Any]=_dev_adapter_fa
         if i<len(plan)-1:sleep_fn(INTER_CALL_DELAY_SECONDS)
     except KeyboardInterrupt:aborted=True
     finally:adapter.close()
-    authorized=terminal==valid==48 and invalid==provider==0 and not aborted; summary={"planned":48,"terminal":terminal,"valid":valid,"invalid":invalid,"provider_failures":provider,"aborted":aborted,"analysis_authorized":authorized};(out/"downstream_summary.json").write_bytes(_canonical(summary));return summary
+    runs=[json.loads(x) for x in (out/"downstream_runs.jsonl").read_text().splitlines() if x]; expected={_downstream_slot_key(x) for x in plan}; keys=[_downstream_slot_key(x) for x in runs]; actual=set(keys); duplicates=len(keys)-len(actual); missing=len(expected-actual); unexpected=len(actual-expected)
+    authorized=terminal==valid==48 and invalid==provider==0 and not aborted and len(expected)==len(actual)==48 and not duplicates and not missing and not unexpected
+    summary={"planned":48,"terminal":terminal,"valid":valid,"invalid":invalid,"provider_failures":provider,"aborted":aborted,"missing_expected_downstream_slots":missing,"unexpected_downstream_slots":unexpected,"duplicate_downstream_slots":duplicates,"analysis_authorized":authorized};(out/"downstream_summary.json").write_bytes(_canonical(summary));return summary
 
 def _errors(rows:list[dict])->set[tuple[str,str,str]]:
     return {(x["scenario_id"],x["decision_id"],f) for x in rows for f in ("materially_dependent","still_justified") if x["true_"+f]!=x["predicted_"+f]}
@@ -304,19 +343,41 @@ def classify(rows:dict[str,list[dict]])->dict:
     else:
         p0s=sum(x["true_dependency_strength"]!=x["predicted_dependency_strength"] for x in rows["P0"]); pas=sum(x["true_dependency_strength"]!=x["predicted_dependency_strength"] for x in rows["PAUTO"]);status="AUTO STRUCTURAL-ONLY" if pas<p0s else "AMBIGUOUS"
     return {"status":status,"oracle_corrections":[list(x) for x in sorted(oracle)],"oracle_regressions":[list(x) for x in sorted(oracle_reg)],"recovered_oracle_units":[list(x) for x in sorted(recovered)],"new_pauto_regressions":[list(x) for x in sorted(reg["PAUTO"])]}
+def _contrast(left:list[dict],right:list[dict])->dict:
+    le,re=_errors(left),_errors(right); corrections=sorted(le-re); regressions=sorted(re-le)
+    ls=sum(x["true_dependency_strength"]!=x["predicted_dependency_strength"] for x in left); rs=sum(x["true_dependency_strength"]!=x["predicted_dependency_strength"] for x in right)
+    material_fn=lambda rows:sorted((x["scenario_id"],x["decision_id"],"materially_dependent") for x in rows if x["true_materially_dependent"] is True and x["predicted_materially_dependent"] is False)
+    return {"corrections":[list(x) for x in corrections],"regressions":[list(x) for x in regressions],"affected_operational_units":[list(x) for x in sorted(set(corrections)|set(regressions))],"dependency_strength_errors_left":ls,"dependency_strength_errors_right":rs,"dependency_strength_error_delta":rs-ls,"dependency_strength_secondary_only":True,"material_false_negatives_left":[list(x) for x in material_fn(left)],"material_false_negatives_right":[list(x) for x in material_fn(right)]}
+def _capture_diagnostics(out:Path)->dict:
+    runs=[json.loads(x) for x in (out/"capture_runs.jsonl").read_text().splitlines() if x and json.loads(x).get("validation_status")=="valid"]
+    pgen=[x["canonical_payload"] for x in runs if x["condition_id"]=="PGEN"]; pauto=[x["canonical_payload"] for x in runs if x["condition_id"]=="PAUTO"]
+    grounded=[len(x["grounded_items"]) for x in pgen]; items=[item for x in pauto for c in CATEGORIES for item in x[c]]; per=[sum(len(x[c]) for c in CATEGORIES) for x in pauto]; refs=[len(x["source_refs"]) for x in items]
+    return {"PGEN":{"record_count":len(pgen),"total_grounded_items":sum(grounded),"grounded_items_per_decision":grounded,"empty_record_count":sum(x==0 for x in grounded),"invalid_reference_count":0},"PAUTO":{"record_count":len(pauto),"total_premise_items":len(items),"items_by_category":{c:sum(len(x[c]) for x in pauto) for c in CATEGORIES},"observed_count":sum(x["source_type"]=="observed" for x in items),"inferred_count":sum(x["source_type"]=="inferred" for x in items),"source_ref_counts":refs,"empty_record_count":sum(x==0 for x in per),"semantic_entailment_certified":False}}
+def _analysis_report(result:dict)->str:
+    lines=["# Decision Premise Capture v0.1 — DEV analysis","","DEV-only diagnostic evidence; not generalization, confirmation, or production-readiness evidence.","","## Classification","",result["classification"]["status"],"","## Per-condition metrics",""]
+    for c in DOWNSTREAM_CONDITIONS:lines.extend([f"### {c}","",f"```json\n{json.dumps(result['per_condition'][c],sort_keys=True,indent=2)}\n```",""])
+    lines.extend(["## Frozen contrasts",""])
+    for name,value in result["contrasts"].items():lines.extend([f"### {name}","",f"```json\n{json.dumps(value,sort_keys=True,indent=2)}\n```",""])
+    lines.extend(["## Capture diagnostics","",f"```json\n{json.dumps(result['capture_diagnostics'],sort_keys=True,indent=2)}\n```","","## dev-002/d3 forensic endpoint","",f"```json\n{json.dumps(result['forensic_endpoint'],sort_keys=True,indent=2)}\n```","","The forensic section reports persisted propositions and source references only. It does not certify semantic entailment or hidden reasoning.",""])
+    return "\n".join(lines)
 def analyze(out:Path,analysis_dir:Path)->dict:
     if analysis_dir.exists():raise DecisionPremiseCaptureError("analysis directory exists")
     m,plan,_=_validate_pre_execute(out,FULL_MANIFEST,FULL_VERSION,"downstream_plan.json",runtime_integrity=False); summary=json.loads((out/"downstream_summary.json").read_text()); runs=[json.loads(x) for x in (out/"downstream_runs.jsonl").read_text().splitlines() if x]
-    if summary.get("analysis_authorized") is not True or len(runs)!=48 or any(x["validation_status"]!="valid" for x in runs):raise DecisionPremiseCaptureError("complete 48-valid downstream experiment required")
-    expected={(x["scenario_id"],x["condition_id"],x["repetition_id"]) for x in plan}; actual={(x["scenario_id"],x["condition_id"],x["repetition_id"]) for x in runs}
-    if len(actual)!=48 or actual!=expected:raise DecisionPremiseCaptureError("downstream slot identity mismatch")
+    required={"planned":48,"terminal":48,"valid":48,"invalid":0,"provider_failures":0,"aborted":False,"missing_expected_downstream_slots":0,"unexpected_downstream_slots":0,"duplicate_downstream_slots":0,"analysis_authorized":True}
+    if any(summary.get(k)!=v for k,v in required.items()) or len(runs)!=48 or any(x["validation_status"]!="valid" for x in runs):raise DecisionPremiseCaptureError("complete 48-valid downstream experiment required")
+    expected={_downstream_slot_key(x) for x in plan}; keys=[_downstream_slot_key(x) for x in runs]; actual=set(keys)
+    if len(keys)!=len(actual) or len(actual)!=48 or actual!=expected:raise DecisionPremiseCaptureError("downstream slot identity mismatch")
     scenarios={x["id"]:x for x in _dev()}; ledger=[]
     for run in runs:
       truth={x["decision_id"]:x for x in scenarios[run["scenario_id"]]["private"]["decision_labels"]}
+      expected_decisions=[x["id"] for x in scenarios[run["scenario_id"]]["candidate"]["decisions"]]
+      if [x["decision_id"] for x in run["parsed_candidate_response"]["decisions"]]!=expected_decisions:raise DecisionPremiseCaptureError("downstream decision coverage/order mismatch")
       for p in run["parsed_candidate_response"]["decisions"]:
         t=truth[p["decision_id"]];ledger.append({"scenario_id":run["scenario_id"],"decision_id":p["decision_id"],"condition_id":run["condition_id"],"true_materially_dependent":t["materially_dependent"],"predicted_materially_dependent":p["materially_dependent"],"true_still_justified":t["still_justified"],"predicted_still_justified":p["still_justified"],"true_dependency_strength":t["dependency_strength"],"predicted_dependency_strength":p["dependency_strength"]})
-    by={c:[x for x in ledger if x["condition_id"]==c] for c in DOWNSTREAM_CONDITIONS}; result={"analysis_version":"decision-premise-capture-analysis-v0.1","per_condition":{c:_condition_metrics(by[c]) for c in DOWNSTREAM_CONDITIONS},"contrasts":["P0_to_PORACLE","P0_to_PGEN","PGEN_to_PAUTO","P0_to_PAUTO","PAUTO_to_PORACLE"],"classification":classify(by),"forensic_endpoint":{c:next(x for x in by[c] if x["scenario_id"]=="dev-002" and x["decision_id"]=="d3") for c in DOWNSTREAM_CONDITIONS},"historical_results_used":False,"confirmation_authorized":False}
-    analysis_dir.mkdir();(analysis_dir/"decision_premise_capture_analysis.json").write_bytes(_canonical(result));return result
+    by={c:[x for x in ledger if x["condition_id"]==c] for c in DOWNSTREAM_CONDITIONS}; pairs=(("P0","PORACLE"),("P0","PGEN"),("PGEN","PAUTO"),("P0","PAUTO"),("PAUTO","PORACLE")); contrasts={f"{a}_to_{b}":_contrast(by[a],by[b]) for a,b in pairs}
+    artifacts=_capture_artifacts(out); premise=artifacts[("dev-002","d3","PAUTO")]; forensic={"downstream_predictions":{c:next(x for x in by[c] if x["scenario_id"]=="dev-002" and x["decision_id"]=="d3") for c in DOWNSTREAM_CONDITIONS},"pauto_capture":{"scenario_id":"dev-002","decision_id":"d3","categories_present":{c:bool(premise[c]) for c in CATEGORIES},"premise_items":[{"category":c,"proposition":x["proposition"],"source_type":x["source_type"],"source_refs":x["source_refs"]} for c in CATEGORIES for x in premise[c]],"observable_persisted_data_only":True,"semantic_entailment_certified":False,"hidden_reasoning_claimed":False}}
+    result={"analysis_version":"decision-premise-capture-analysis-v0.1","per_condition":{c:_condition_metrics(by[c]) for c in DOWNSTREAM_CONDITIONS},"contrasts":contrasts,"capture_diagnostics":_capture_diagnostics(out),"classification":classify(by),"forensic_endpoint":forensic,"operational_unit_definition":["scenario_id","decision_id","field"],"operational_fields":["materially_dependent","still_justified"],"dependency_strength_secondary_only":True,"historical_results_used":False,"confirmation_authorized":False,"oracle_similarity_metric_used":False}
+    analysis_dir.mkdir();(analysis_dir/"decision_premise_capture_analysis.json").write_bytes(_canonical(result));(analysis_dir/"DECISION_PREMISE_CAPTURE_REPORT.md").write_text(_analysis_report(result),encoding="utf-8",newline="\n");return result
 
 def main(argv=None)->int:
     p=argparse.ArgumentParser();p.add_argument("--output-dir",type=Path,required=True);p.add_argument("--analysis-dir",type=Path);p.add_argument("--sanity-dir",type=Path);g=p.add_mutually_exclusive_group(required=True)
