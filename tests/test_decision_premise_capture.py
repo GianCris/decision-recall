@@ -36,8 +36,10 @@ class DecisionPremiseCaptureTests(unittest.TestCase):
         by={x["id"]:x for x in self.scenarios}
         for s,p in zip(snaps,proof["snapshot_proofs"]):
             raw=by[s["scenario_id"]];made=s["target_decision"]["made_at"]
+            self.assertEqual(set(dpc.visible_snapshot(s)),{"system_pre_change_context","strictly_earlier_recorded_transmissions","strictly_earlier_system_recorded_decisions","target_decision"})
+            self.assertNotIn("scenario_id",json.loads(dpc._capture_prompt("PGEN",s).split("\n\nCONSERVATIVE PRE-CHANGE SNAPSHOT:\n",1)[1]))
             self.assertEqual(s["system_pre_change_context"]["knowledge_before"],raw["candidate"]["knowledge_before"])
-            self.assertTrue(all(x["at"]<made for x in s["strictly_earlier_recorded_transmissions"]));self.assertTrue(all(x["made_at"]<made for x in s["strictly_earlier_system_recorded_decisions"]));self.assertFalse(dpc._scan_keys(s));self.assertEqual(p["snapshot_sha256"],dpc._sha(dpc._canonical(s)))
+            self.assertTrue(all(x["at"]<made for x in s["strictly_earlier_recorded_transmissions"]));self.assertTrue(all(x["made_at"]<made for x in s["strictly_earlier_system_recorded_decisions"]));self.assertFalse(dpc._scan_keys(s));self.assertEqual(p["snapshot_sha256"],dpc._sha(dpc._canonical(dpc.visible_snapshot(s))))
     def test_dev_only_loader_and_holdout_guard(self):
         attempts=[];real=catalog.files
         with patch("dr_bench.catalog.files",side_effect=lambda pkg:HoldoutGuard(real(pkg),attempts)),patch.object(dpc,"load_scenarios",wraps=catalog.load_scenarios) as loader:dpc.audit_snapshots()

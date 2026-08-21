@@ -56,6 +56,8 @@ def build_snapshot(scenario:dict,target:dict)->dict:
     return {"scenario_id":scenario["id"],"system_pre_change_context":{"agents":copy.deepcopy(scenario["candidate"]["agents"]),"knowledge_before":copy.deepcopy(scenario["candidate"]["knowledge_before"])},
         "strictly_earlier_recorded_transmissions":[copy.deepcopy(x) for x in scenario["candidate"]["transmissions"] if x["at"]<made],
         "strictly_earlier_system_recorded_decisions":[_public_decision(x) for x in scenario["candidate"]["decisions"] if x["made_at"]<made],"target_decision":_public_decision(target)}
+def visible_snapshot(snapshot:dict)->dict:
+    return {k:copy.deepcopy(snapshot[k]) for k in ("system_pre_change_context","strictly_earlier_recorded_transmissions","strictly_earlier_system_recorded_decisions","target_decision")}
 def build_snapshots(scenarios:list[dict]|None=None)->list[dict]:
     scenarios=_dev() if scenarios is None else scenarios
     return [build_snapshot(s,d) for s in scenarios for d in sorted(s["candidate"]["decisions"],key=lambda x:x["id"])]
@@ -66,7 +68,7 @@ def _scan_keys(v:Any)->set[str]:
 def snapshot_proof(scenario:dict,snapshot:dict)->dict:
     target=snapshot["target_decision"]; made=target["made_at"]; tx=scenario["candidate"]["transmissions"]; ds=scenario["candidate"]["decisions"]
     forbidden=sorted(_scan_keys(snapshot)); ok=not forbidden and all(x["at"]<made for x in snapshot["strictly_earlier_recorded_transmissions"]) and all(x["made_at"]<made for x in snapshot["strictly_earlier_system_recorded_decisions"])
-    return {"scenario_id":scenario["id"],"target_decision_id":target["id"],"target_agent_id":target["agent_id"],"target_made_at":made,"snapshot_sha256":_sha(_canonical(snapshot)),
+    return {"scenario_id":scenario["id"],"target_decision_id":target["id"],"target_agent_id":target["agent_id"],"target_made_at":made,"snapshot_sha256":_sha(_canonical(visible_snapshot(snapshot))),
       "included_knowledge_ids":[x["id"] for x in snapshot["system_pre_change_context"]["knowledge_before"]],"included_transmission_ids":[x["id"] for x in tx if x["at"]<made],"included_prior_decision_ids":[x["id"] for x in ds if x["made_at"]<made],
       "excluded_same_time_transmission_ids":[x["id"] for x in tx if x["at"]==made],"excluded_future_transmission_ids":[x["id"] for x in tx if x["at"]>made],"excluded_later_decision_ids":[x["id"] for x in ds if x["made_at"]>=made and x["id"]!=target["id"]],
       "forbidden_fields_found":forbidden,"dev_only_loader":True,"pass":ok}
@@ -88,6 +90,7 @@ def resolve_pointer(root:dict,pointer:str)->Any:
 def _keys(v:Any,expected:set[str],label:str):
     if not isinstance(v,dict) or set(v)!=expected:raise CaptureValidationError(label+" invalid fields")
 def validate_pgen(v:Any,snapshot:dict)->tuple[dict,dict]:
+    snapshot=visible_snapshot(snapshot)
     _keys(v,{"target_decision_id","grounded_items"},"PGEN")
     if v["target_decision_id"]!=snapshot["target_decision"]["id"]:raise CaptureValidationError("target_decision_id mismatch")
     items=v["grounded_items"]
@@ -101,6 +104,7 @@ def validate_pgen(v:Any,snapshot:dict)->tuple[dict,dict]:
     canonical={"target_decision_id":v["target_decision_id"],"grounded_items":sorted(copy.deepcopy(items),key=lambda x:x["source_path"])}
     return canonical,{"item_count":len(items),"invalid_refs":0,"extraction_valid":True}
 def validate_pauto(v:Any,snapshot:dict)->tuple[dict,dict]:
+    snapshot=visible_snapshot(snapshot)
     _keys(v,{"target_decision_id",*CATEGORIES},"PAUTO")
     if v["target_decision_id"]!=snapshot["target_decision"]["id"]:raise CaptureValidationError("target_decision_id mismatch")
     total=observed=inferred=0; canonical={"target_decision_id":v["target_decision_id"]}; counts={}
@@ -129,12 +133,12 @@ def select_sanity(snaps:list[dict])->tuple[dict,dict]:
     s2=sorted(ordered[1:],key=lambda x:(-score(x),x["scenario_id"],x["target_decision"]["id"]))[0]; return s1,s2
 def sanity_plan(snaps:list[dict])->list[dict]:
     a,b=select_sanity(snaps); pairs=((a,"PGEN"),(a,"PAUTO"),(b,"PAUTO"),(b,"PGEN"))
-    return [{"global_execution_index":i,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(s))} for i,(s,c) in enumerate(pairs,1)]
+    return [{"global_execution_index":i,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(visible_snapshot(s)))} for i,(s,c) in enumerate(pairs,1)]
 def capture_plan(snaps:list[dict])->list[dict]:
     out=[]
     for n,s in enumerate(sorted(snaps,key=lambda x:(x["scenario_id"],x["target_decision"]["id"])),1):
         order=("PGEN","PAUTO") if n%2 else ("PAUTO","PGEN")
-        for c in order:out.append({"global_execution_index":len(out)+1,"snapshot_index":n,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(s))})
+        for c in order:out.append({"global_execution_index":len(out)+1,"snapshot_index":n,"scenario_id":s["scenario_id"],"decision_id":s["target_decision"]["id"],"condition_id":c,"observation_kind":"capture","snapshot_sha256":_sha(_canonical(visible_snapshot(s)))})
     return out
 def downstream_plan()->list[dict]:
     rows=(("P0","PGEN","PAUTO","PORACLE"),("PGEN","PAUTO","PORACLE","P0"),("PAUTO","PORACLE","P0","PGEN"),("PORACLE","P0","PGEN","PAUTO")); out=[]
@@ -209,7 +213,7 @@ def _validate_pre_execute(out:Path,mtype:str,version:str,plan_name="execution_pl
         structure=json.loads(sp.read_text())
         if structure.get("all_pass") is not True or structure.get("pass_count")!=12 or structure.get("ignored_diff_paths")!=[] or len(structure.get("scenario_proofs",[]))!=12 or not all(x.get("pass") and x.get("discovery_condition_absent") and x.get("ignored_diff_paths")==[] for x in structure["scenario_proofs"]):raise DecisionPremiseCaptureError("downstream structural proof failed")
     (validate_downstream_plan(plan) if plan_name=="downstream_plan.json" else validate_capture_plan(plan) if version==FULL_VERSION else validate_sanity_plan(plan)); return m,plan,json.loads((out/"snapshots.json").read_text())
-def _capture_prompt(c:str,s:dict)->str:return (PGEN_INSTRUCTION if c=="PGEN" else PAUTO_INSTRUCTION)+"\n\nCONSERVATIVE PRE-CHANGE SNAPSHOT:\n"+_compact(s)
+def _capture_prompt(c:str,s:dict)->str:return (PGEN_INSTRUCTION if c=="PGEN" else PAUTO_INSTRUCTION)+"\n\nCONSERVATIVE PRE-CHANGE SNAPSHOT:\n"+_compact(visible_snapshot(s))
 def _append(path:Path,v:dict):
     with path.open("a",encoding="utf-8",newline="\n") as f:f.write(_compact(v)+"\n")
 def _execute_capture(out:Path,sanity:bool,adapter_factory:Callable[[],Any]=_dev_adapter_factory,sleep_fn:Callable[[float],None]=sleep)->dict:
