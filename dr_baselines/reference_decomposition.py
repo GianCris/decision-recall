@@ -264,22 +264,77 @@ def prepare(output_dir: Path) -> dict[str, Any]:
     return manifest
 
 
+def _validate_structural_proof(proof: dict[str, Any]) -> None:
+    if proof.get("all_pass") is not True:
+        raise ReferenceDecompositionError("prepared structural proof all_pass gate failed")
+    if proof.get("normalization_pass_count") != 12:
+        raise ReferenceDecompositionError("prepared structural proof normalization count mismatch")
+    if proof.get("factorial_pass_count") != 12:
+        raise ReferenceDecompositionError("prepared structural proof factorial count mismatch")
+    if proof.get("ignored_diff_paths") != []:
+        raise ReferenceDecompositionError("prepared structural proof contains ignored diff paths")
+    scenario_proofs = proof.get("scenario_proofs")
+    if not isinstance(scenario_proofs, list) or len(scenario_proofs) != 12:
+        raise ReferenceDecompositionError("prepared structural proof scenario count mismatch")
+    for scenario_proof in scenario_proofs:
+        normalization = scenario_proof.get("normalization")
+        if not isinstance(normalization, dict) or normalization.get("pass") is not True:
+            raise ReferenceDecompositionError("prepared scenario normalization proof failed")
+        if scenario_proof.get("factorial_pass") is not True:
+            raise ReferenceDecompositionError("prepared scenario factorial proof failed")
+        if scenario_proof.get("pass") is not True:
+            raise ReferenceDecompositionError("prepared scenario proof failed")
+
+
 def _validate_prepared(output_dir: Path, prohibit_existing_runs: bool = True) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not (output_dir / MANIFEST_FILENAME).exists() or not (output_dir / PLAN_FILENAME).exists():
+    if not all((output_dir / name).exists() for name in (MANIFEST_FILENAME, PLAN_FILENAME, PROOF_FILENAME)):
         raise ReferenceDecompositionError("compatible PREPARE artifacts required")
-    manifest = json.loads((output_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")); plan_bytes = (output_dir / PLAN_FILENAME).read_bytes(); plan = json.loads(plan_bytes)
-    if manifest.get("manifest_type") != MANIFEST_TYPE or manifest.get("experiment_version") != EXPERIMENT_VERSION or not manifest.get("execute_eligible"):
+    manifest = json.loads((output_dir / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    plan_bytes = (output_dir / PLAN_FILENAME).read_bytes(); proof_bytes = (output_dir / PROOF_FILENAME).read_bytes()
+    plan = json.loads(plan_bytes); proof = json.loads(proof_bytes)
+    if manifest.get("manifest_type") != MANIFEST_TYPE or manifest.get("experiment_version") != EXPERIMENT_VERSION:
+        raise ReferenceDecompositionError("compatible PREPARE manifest required")
+    if manifest.get("protocol_commit_sha") != PROTOCOL_COMMIT or manifest.get("protocol_sha256") != PROTOCOL_SHA256:
+        raise ReferenceDecompositionError("prepared protocol identity mismatch")
+    if manifest.get("prepare_status") != "PREPARED" or manifest.get("execute_eligible") is not True:
         raise ReferenceDecompositionError("compatible execute-eligible PREPARE manifest required")
+    if _sha(plan_bytes) != manifest.get("execution_plan_sha256"):
+        raise ReferenceDecompositionError("prepared execution-plan byte identity mismatch")
     validate_plan(plan)
-    if _sha(plan_bytes) != manifest.get("execution_plan_sha256") or manifest.get("implementation_commit_sha") != _git("rev-parse", "HEAD"):
-        raise ReferenceDecompositionError("prepared plan/implementation identity mismatch")
+    if _sha(proof_bytes) != manifest.get("structural_proof_sha256"):
+        raise ReferenceDecompositionError("prepared structural-proof byte identity mismatch")
+    _validate_structural_proof(proof)
     if prohibit_existing_runs and (output_dir / "runs.jsonl").exists():
         raise ReferenceDecompositionError("existing execution artifacts prohibit re-execution")
     return manifest, plan
 
 
-def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_factory, sleep_fn: Callable[[float], None] = sleep) -> dict[str, Any]:
+def validate_execute_integrity(output_dir: Path) -> dict[str, Any]:
     manifest, plan = _validate_prepared(output_dir)
+    current_protocol_sha = protocol_sha256()
+    if current_protocol_sha != PROTOCOL_SHA256 or current_protocol_sha != manifest.get("protocol_sha256"):
+        raise ReferenceDecompositionError("current protocol identity mismatch")
+    current_head = _git("rev-parse", "HEAD")
+    if current_head != manifest.get("implementation_commit_sha"):
+        raise ReferenceDecompositionError("current implementation commit identity mismatch")
+    if _git("status", "--porcelain", "--untracked-files=no"):
+        raise ReferenceDecompositionError("tracked worktree must be clean before EXECUTE")
+    return {
+        "protocol_sha_match": True, "implementation_head_match": True,
+        "tracked_worktree_clean": True, "execution_plan_hash_match": True,
+        "semantic_plan_validation": True, "structural_proof_hash_match": True,
+        "structural_proof_content": True, "execute_eligible": True,
+        "planned_scientific_observations": len(plan),
+    }
+
+
+def _validate_execute_runtime(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    validate_execute_integrity(output_dir)
+    return _validate_prepared(output_dir)
+
+
+def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_factory, sleep_fn: Callable[[float], None] = sleep) -> dict[str, Any]:
+    manifest, plan = _validate_execute_runtime(output_dir)
     scenarios = {scenario["id"]: scenario for scenario in _dev_scenarios()}
     adapter = adapter_factory(); runs_path = output_dir / "runs.jsonl"; lifecycle = output_dir / "delivery_attempts.jsonl"; evaluations_path = output_dir / "evaluations.jsonl"; config = _config()
     completed = valid = invalid = provider_failures = 0; interrupted = False
@@ -289,7 +344,8 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
             delivery = run_delivery_attempts(entry, lifecycle, lambda: adapter.generate(prompt, config, response_schema=DISCOVERY_RESPONSE_JSON_SCHEMA), sleep_fn)
             record = {**entry, "baseline_id": entry["condition_id"], "condition": entry["condition_id"], "prompt_version": EXPERIMENT_VERSION, "experiment_config_version": config.version, "model_adapter": adapter.identifier, "experiment_config": config.to_dict()}
             if delivery["result"] is None:
-                provider_failures += 1; record.update({"raw_model_response": None, "parsed_candidate_response": None, "validation_status": "provider_error", "validation_error": None, "provider_error": delivery["error"], "delivery_attempts_used": delivery["attempts_used"]})
+                error = delivery["last_error"]
+                provider_failures += 1; record.update({"raw_model_response": None, "parsed_candidate_response": None, "validation_status": "provider_error", "validation_error": None, "provider_error": f"{type(error).__name__}: {error}", "delivery_attempts_used": delivery["attempts_used"]})
             else:
                 response = delivery["result"]
                 try:
@@ -307,7 +363,7 @@ def execute(output_dir: Path, adapter_factory: Callable[[], Any] = _dev_adapter_
         interrupted = True
     finally:
         adapter.close()
-    summary = {"experiment_version": EXPERIMENT_VERSION, "planned": 48, "completed": completed, "valid": valid, "invalid": invalid, "provider_failures": provider_failures, "experiment_status": "completed" if completed == 48 and not interrupted else "aborted", "abort_reason": "operator_interrupt" if interrupted else None, "analysis_authorized": completed == 48 and provider_failures == 0 and not interrupted}
+    summary = {"experiment_version": EXPERIMENT_VERSION, "planned": 48, "completed": completed, "valid": valid, "invalid": invalid, "provider_failures": provider_failures, "experiment_status": "completed" if completed == 48 and not interrupted else "aborted", "abort_reason": "operator_interrupt" if interrupted else None, "analysis_authorized": completed == 48 and valid == 48 and invalid == 0 and provider_failures == 0 and not interrupted}
     (output_dir / "summary.json").write_bytes(_canonical_json(summary))
     if interrupted: raise KeyboardInterrupt
     return summary

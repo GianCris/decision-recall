@@ -9,6 +9,7 @@ from unittest.mock import patch
 import dr_bench.catalog as catalog
 import dr_baselines.reference_decomposition as rd
 from dr_bench import candidate_view
+from dr_baselines.models import ModelResponse
 
 
 class HoldoutGuard:
@@ -26,6 +27,28 @@ class ReferenceDecompositionTests(unittest.TestCase):
 
     def clean_git(self):
         return patch.object(rd, "_git", side_effect=lambda *args: rd.PROTOCOL_COMMIT if args[0] == "rev-parse" and args[1].endswith("^{commit}") else "implementation-sha" if args[0] == "rev-parse" else "agent/baselines-v0.1" if args[0] == "branch" else "")
+
+    class Adapter:
+        identifier = "offline-test-adapter"
+        def __init__(self, invalid_at=None, provider_failure_at=None, interrupt_at=None):
+            self.calls = 0; self.invalid_at = invalid_at; self.provider_failure_at = provider_failure_at; self.interrupt_at = interrupt_at
+        def generate(self, prompt, config, response_schema=None):
+            self.calls += 1
+            if self.calls == self.interrupt_at: raise KeyboardInterrupt
+            if self.calls == self.provider_failure_at: raise ValueError("synthetic terminal provider failure")
+            if self.calls == self.invalid_at: return ModelResponse(text="{}")
+            visible = json.loads(prompt.split("\n\nCANDIDATE-VISIBLE SCENARIO:\n", 1)[1])
+            predictions = [{"decision_id": item["id"], "materially_dependent": False, "dependency_strength": "independent", "still_justified": True} for item in visible["decisions"]]
+            return ModelResponse(text=json.dumps({"decisions": predictions}))
+        def close(self): pass
+
+    def prepared(self):
+        with self.clean_git(): rd.prepare(self.output)
+
+    def assert_execute_blocked_before_adapter(self):
+        constructed=[]
+        with self.assertRaises(rd.ReferenceDecompositionError): rd.execute(self.output, adapter_factory=lambda: constructed.append(True))
+        self.assertEqual(constructed, [])
 
     def test_exact_four_conditions_and_views(self):
         self.assertEqual(rd.CONDITIONS, ("R0", "RE", "RA", "REA"))
@@ -83,6 +106,60 @@ class ReferenceDecompositionTests(unittest.TestCase):
         with patch.object(rd,"_dev_adapter_factory",side_effect=AssertionError("provider constructed")):
             with self.assertRaises(rd.ReferenceDecompositionError): rd.execute(self.output)
 
+    def test_execute_runtime_integrity_valid_and_runtime_only(self):
+        self.prepared()
+        with self.clean_git(): self.assertTrue(rd.validate_execute_integrity(self.output)["tracked_worktree_clean"])
+        with patch.object(rd, "_git", side_effect=lambda *args: "different" if args[:2] == ("rev-parse", "HEAD") else ""):
+            self.assert_execute_blocked_before_adapter()
+        with patch.object(rd, "_git", side_effect=lambda *args: "implementation-sha" if args[:2] == ("rev-parse", "HEAD") else "tracked-change" if args[0] == "status" else ""):
+            self.assert_execute_blocked_before_adapter()
+        with self.clean_git(), patch.object(rd, "protocol_sha256", return_value="wrong"):
+            self.assert_execute_blocked_before_adapter()
+
+    def test_plan_hash_and_semantic_validation_precede_adapter(self):
+        self.prepared(); plan_path=self.output/rd.PLAN_FILENAME; manifest_path=self.output/rd.MANIFEST_FILENAME
+        plan=json.loads(plan_path.read_text()); plan[0]["condition_id"]="BROKEN"; plan_path.write_bytes(rd._canonical_json(plan))
+        with self.clean_git(): self.assert_execute_blocked_before_adapter()
+        manifest=json.loads(manifest_path.read_text()); manifest["execution_plan_sha256"]=rd._sha(plan_path.read_bytes()); manifest_path.write_bytes(rd._canonical_json(manifest))
+        with self.clean_git(): self.assert_execute_blocked_before_adapter()
+
+    def test_structural_proof_hash_and_content_gates_precede_adapter(self):
+        def normalization_false(proof): proof["scenario_proofs"][0]["normalization"]["pass"] = False
+        def factorial_false(proof): proof["scenario_proofs"][0]["factorial_pass"] = False
+        def scenario_false(proof): proof["scenario_proofs"][0]["pass"] = False
+        mutations = (
+            lambda p: p.update(all_pass=False), lambda p: p.update(normalization_pass_count=11),
+            lambda p: p.update(factorial_pass_count=11), lambda p: p.update(ignored_diff_paths=["/ignored"]),
+            lambda p: p.update(scenario_proofs=p["scenario_proofs"][:-1]), normalization_false, factorial_false, scenario_false,
+        )
+        import shutil
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                if self.output.exists(): shutil.rmtree(self.output)
+                self.prepared(); proof_path=self.output/rd.PROOF_FILENAME; manifest_path=self.output/rd.MANIFEST_FILENAME
+                proof=json.loads(proof_path.read_text()); mutate(proof); proof_path.write_bytes(rd._canonical_json(proof))
+                with self.clean_git(): self.assert_execute_blocked_before_adapter()
+                manifest=json.loads(manifest_path.read_text()); manifest["structural_proof_sha256"]=rd._sha(proof_path.read_bytes()); manifest_path.write_bytes(rd._canonical_json(manifest))
+                with self.clean_git(): self.assert_execute_blocked_before_adapter()
+
+    def test_manifest_eligibility_blocks_before_adapter(self):
+        self.prepared(); path=self.output/rd.MANIFEST_FILENAME; manifest=json.loads(path.read_text()); manifest["execute_eligible"]=False; path.write_bytes(rd._canonical_json(manifest))
+        with self.clean_git(): self.assert_execute_blocked_before_adapter()
+
+    def test_execute_completeness_authorization_and_invalid_is_not_retried(self):
+        import shutil
+        cases=((None,None,48,0,0,True),(48,None,47,1,0,False),(None,48,47,0,1,False))
+        for invalid_at, provider_at, valid, invalid, failures, authorized in cases:
+            with self.subTest(invalid_at=invalid_at, provider_at=provider_at):
+                if self.output.exists(): shutil.rmtree(self.output)
+                self.prepared(); adapter=self.Adapter(invalid_at=invalid_at, provider_failure_at=provider_at)
+                with self.clean_git(): summary=rd.execute(self.output, adapter_factory=lambda:adapter, sleep_fn=lambda _:None)
+                self.assertEqual((summary["valid"],summary["invalid"],summary["provider_failures"],summary["analysis_authorized"]),(valid,invalid,failures,authorized))
+                self.assertEqual(adapter.calls,48)
+        shutil.rmtree(self.output); self.prepared(); adapter=self.Adapter(interrupt_at=1)
+        with self.clean_git(), self.assertRaises(KeyboardInterrupt): rd.execute(self.output,adapter_factory=lambda:adapter,sleep_fn=lambda _:None)
+        self.assertFalse(json.loads((self.output/"summary.json").read_text())["analysis_authorized"])
+
     def test_same_prompt_schema_model_and_transport_are_frozen(self):
         with self.clean_git(): manifest=rd.prepare(self.output)
         self.assertEqual(manifest["base_task_prompt_sha256"],rd._sha(rd.BASE_TASK_PROMPT.encode()))
@@ -139,7 +216,7 @@ class ReferenceDecompositionTests(unittest.TestCase):
     def test_analyze_is_dev_only_complete_and_zero_provider(self):
         self.make_completed_fixture(); analysis=Path(self.temp.name)/"analysis"; attempts=[]; real_files=catalog.files
         def guarded(package): return HoldoutGuard(real_files(package),attempts)
-        with self.clean_git(), patch("dr_bench.catalog.files",side_effect=guarded), patch.object(rd,"load_scenarios",wraps=catalog.load_scenarios) as loader, patch.object(rd,"_dev_adapter_factory",side_effect=AssertionError("provider constructed")):
+        with patch.object(rd,"_git",side_effect=AssertionError("ANALYZE must not inspect current HEAD/worktree")), patch("dr_bench.catalog.files",side_effect=guarded), patch.object(rd,"load_scenarios",wraps=catalog.load_scenarios) as loader, patch.object(rd,"_dev_adapter_factory",side_effect=AssertionError("provider constructed")):
             result=rd.analyze(self.output,analysis)
         self.assertEqual(attempts,[]); self.assertTrue(all(call.args==("dev",) for call in loader.call_args_list)); self.assertEqual(result["analysis_status"],"COMPLETE"); self.assertTrue(result["factorial_pattern"]["pattern"].startswith("PATTERN E")); self.assertIn("R0",result["forensic_endpoint"]); self.assertFalse(result["confirmation_authorized"]); self.assertFalse(result["historical_results_used"])
 
