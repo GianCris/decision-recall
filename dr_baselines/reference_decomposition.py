@@ -238,8 +238,8 @@ def prepare(output_dir: Path) -> dict[str, Any]:
         "protocol_commit_sha": PROTOCOL_COMMIT, "protocol_sha256": PROTOCOL_SHA256,
         "implementation_commit_sha": _git("rev-parse", "HEAD"), "branch": _git("branch", "--show-current"), "created_at_utc": _utc_now(),
         "dev_scenario_ids": list(DEV_SCENARIOS), "conditions": {
-            "R0": "exact implicit view", "RE": "implicit plus evidence_available only",
-            "RA": "implicit plus assumptions only", "REA": "exact full structured decision-context view",
+            "R0": "normalized implicit view with discovery_condition removed", "RE": "normalized implicit plus evidence_available only",
+            "RA": "normalized implicit plus assumptions only", "REA": "normalized full structured decision-context view with discovery_condition removed",
         },
         "planned_scientific_observations": 48, "repetitions": 1, "execution_plan_sha256": plan_sha,
         "structural_proof_sha256": _sha(proof_bytes),

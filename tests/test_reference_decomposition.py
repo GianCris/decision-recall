@@ -69,6 +69,7 @@ class ReferenceDecompositionTests(unittest.TestCase):
         self.assertEqual(attempts, []); self.assertTrue(all(call.args == ("dev",) for call in loader.call_args_list))
         self.assertTrue(manifest["execute_eligible"]); self.assertEqual(manifest["forensic_endpoint"], {"scenario_id":"dev-002","decision_id":"d3"})
         self.assertTrue(manifest["fresh_calls_required"]); self.assertFalse(manifest["historical_response_reuse_authorized"]); self.assertFalse(manifest["confirmation_authorized"])
+        self.assertTrue(all("normalized" in description for description in manifest["conditions"].values()))
 
     def test_prepare_blocks_bad_structural_proof(self):
         original=rd.build_view_bundle
