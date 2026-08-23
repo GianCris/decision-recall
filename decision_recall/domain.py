@@ -30,6 +30,13 @@ class AuthorizationStatus(str, Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class ProvenanceType(str, Enum):
+    CONTEMPORANEOUS_RECORD = "CONTEMPORANEOUS_RECORD"
+    CONTEMPORANEOUS_ELICITED_DECLARATION = "CONTEMPORANEOUS_ELICITED_DECLARATION"
+    RETROSPECTIVE_DECLARATION = "RETROSPECTIVE_DECLARATION"
+    LLM_INFERRED = "LLM_INFERRED"
+
+
 class MatchResult(str, Enum):
     MATCHES = "matches"
     DOES_NOT_MATCH = "does_not_match"
@@ -57,10 +64,16 @@ class SafeReuseResult(str, Enum):
 
 
 @dataclass(frozen=True)
+class TargetRef:
+    id: str
+    version: str
+
+
+@dataclass(frozen=True)
 class EvidenceRecord:
     id: str
     content: str
-    provenance_type: str
+    provenance_type: ProvenanceType
 
 
 @dataclass(frozen=True)
@@ -68,6 +81,7 @@ class Claim:
     id: str
     claim_type: ClaimType
     predicate_key: str
+    current_metric_key: str
     evidence_refs: Tuple[str, ...]
 
 
@@ -111,12 +125,33 @@ class HistoricalRelation:
 
 
 @dataclass(frozen=True)
+class CompositionCandidate:
+    id: str
+    kind: CompositionKind
+    relation_ids: Tuple[str, ...]
+    target_ref: TargetRef
+    asserted_value: CompositionValue
+    evidence_refs: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CompositionAuthorizationDecision:
+    candidate_id: str
+    status: AuthorizationStatus
+    authorized_value: Optional[CompositionValue]
+    evidence_refs: Tuple[str, ...]
+    policy_version: str
+    reason_code: str
+
+
+@dataclass(frozen=True)
 class CompositionState:
     id: str
     kind: CompositionKind
     relation_ids: Tuple[str, ...]
-    target_id: str
+    target_ref: TargetRef
     value: CompositionValue
+    authorization: Optional[CompositionAuthorizationDecision] = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +168,7 @@ class NumericObservation:
     value: float
     unit: str
     window_days: Optional[int] = None
+    source_event_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +244,10 @@ class SafeReuseTargetSpec:
     revisit_rule_ids: Tuple[str, ...]
     limiting_composition_id: str
 
+    @property
+    def ref(self) -> TargetRef:
+        return TargetRef(self.id, self.version)
+
 
 @dataclass(frozen=True)
 class DecisionContract:
@@ -233,3 +273,8 @@ class DecisionContract:
 
     def composition(self, composition_id: str) -> CompositionState:
         return next(c for c in self.composition_states if c.id == composition_id)
+
+
+@dataclass(frozen=True)
+class ValidatedDecisionContract:
+    contract: DecisionContract
