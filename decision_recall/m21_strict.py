@@ -37,6 +37,7 @@ from .temporal import (
     LedgerEntryKind,
     TemporalEvidenceRecord,
     TemporalIntegrityError,
+    source_hash,
 )
 
 
