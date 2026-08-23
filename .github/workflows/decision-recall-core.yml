@@ -44,11 +44,12 @@ jobs:
       - name: Install repository package
         run: python -m pip install -e .
 
-      - name: Run Decision Recall core, temporal-authority, and PostgreSQL tests
+      - name: Run Decision Recall core, temporal-authority, integration, and PostgreSQL tests
         run: |
           python -m unittest -v \
             tests/test_decision_recall_milestone1.py \
             tests/test_decision_recall_milestone2.py \
+            tests/test_decision_recall_milestone2_integration.py \
             tests/test_decision_recall_postgres.py
 
   repository-offline-regression:
@@ -75,12 +76,10 @@ jobs:
           import subprocess
           import sys
 
-          # Historical-analysis suites below depend on archived local experiment
-          # outputs that are intentionally not committed. Decision Recall M1/M2 run
-          # in the dedicated core job, so exclude them here to keep counts disjoint.
           excluded = {
               'test_decision_recall_milestone1.py',
               'test_decision_recall_milestone2.py',
+              'test_decision_recall_milestone2_integration.py',
               'test_decision_recall_postgres.py',
               'test_dev_autopsy.py',
               'test_pauto_provider_probe.py',
