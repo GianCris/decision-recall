@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Iterable, Mapping, Tuple
 
 from .domain import (
     AuthorizationStatus,
     CanonicalWorldState,
+    CompositionCandidate,
     CompositionKind,
+    CompositionState,
     CompositionValue,
     CurrentMatchRule,
     DecisionContract,
@@ -23,9 +25,10 @@ from .domain import (
     SafeReuseResult,
     SafeReuseTargetSpec,
     TargetSupportBinding,
+    ValidatedDecisionContract,
     WorldEvent,
 )
-from .policies import EvidencePolicy
+from .policies import CompositionPolicy, EvidencePolicy
 
 
 class GuardViolation(ValueError):
@@ -63,10 +66,17 @@ def authorize_historical_role(
     ):
         raise GuardViolation("candidate does not fill this relation slot")
 
-    available = tuple(evidence)
-    decision = policy.authorize_historical_role(candidate=candidate, evidence=available)
+    try:
+        decision = policy.authorize_historical_role(
+            candidate=candidate,
+            evidence=tuple(evidence),
+        )
+    except ValueError as exc:
+        raise GuardViolation(str(exc)) from exc
     if decision.status is not AuthorizationStatus.AUTHORIZED:
-        raise GuardViolation(f"evidence policy did not authorize historical role: {decision.reason_code}")
+        raise GuardViolation(
+            f"evidence policy did not authorize historical role: {decision.reason_code}"
+        )
     if decision.authorized_as is not RelationType.HISTORICAL_SUPPORT:
         raise GuardViolation("policy authorization type mismatch")
 
@@ -79,6 +89,125 @@ def authorize_historical_role(
         evidence_refs=tuple(decision.evidence_refs),
         authorization_policy_version=decision.policy_version,
     )
+
+
+def authorize_composition(
+    *,
+    candidate: CompositionCandidate,
+    evidence: Iterable[EvidenceRecord],
+    policy: CompositionPolicy,
+) -> CompositionState:
+    try:
+        decision = policy.authorize(candidate=candidate, evidence=tuple(evidence))
+    except ValueError as exc:
+        raise GuardViolation(str(exc)) from exc
+    if decision.status is not AuthorizationStatus.AUTHORIZED:
+        raise GuardViolation(
+            f"composition policy did not authorize composition: {decision.reason_code}"
+        )
+    if decision.authorized_value is not candidate.asserted_value:
+        raise GuardViolation("composition authorization value mismatch")
+    return CompositionState(
+        id=candidate.id,
+        kind=candidate.kind,
+        relation_ids=candidate.relation_ids,
+        target_ref=candidate.target_ref,
+        value=candidate.asserted_value,
+        authorization=decision,
+    )
+
+
+def _ensure_unique(name: str, ids: Tuple[str, ...]) -> None:
+    if len(ids) != len(set(ids)):
+        raise GuardViolation(f"duplicate {name} id")
+
+
+def _validate_condition(rule_name: str, condition) -> None:
+    if condition.operator not in {">=", "<=", ">", "<", "=="}:
+        raise GuardViolation(f"{rule_name} uses unsupported operator")
+    if condition.minimum_window_days is not None and condition.minimum_window_days < 0:
+        raise GuardViolation(f"{rule_name} minimum_window_days cannot be negative")
+
+
+def validate_contract(contract: DecisionContract) -> ValidatedDecisionContract:
+    collections = {
+        "claim": tuple(item.id for item in contract.claims),
+        "historical relation": tuple(item.id for item in contract.historical_relations),
+        "composition": tuple(item.id for item in contract.composition_states),
+        "current-match rule": tuple(item.id for item in contract.current_match_rules),
+        "revisit rule": tuple(item.id for item in contract.revisit_rules),
+    }
+    for name, ids in collections.items():
+        _ensure_unique(name, ids)
+
+    all_entity_ids = tuple(item for ids in collections.values() for item in ids)
+    if len(all_entity_ids) != len(set(all_entity_ids)):
+        raise GuardViolation("canonical entity ids must be globally unique within a contract")
+
+    claims = {claim.id: claim for claim in contract.claims}
+    relations = {relation.id: relation for relation in contract.historical_relations}
+
+    for claim in contract.claims:
+        if not claim.predicate_key or not claim.current_metric_key:
+            raise GuardViolation("claim requires predicate_key and current_metric_key")
+        if not claim.evidence_refs:
+            raise GuardViolation(f"claim {claim.id} lacks evidence refs")
+
+    for relation in contract.historical_relations:
+        if relation.relation_type is not RelationType.HISTORICAL_SUPPORT:
+            raise GuardViolation("V1 contract only supports HISTORICAL_SUPPORT relations")
+        if relation.subject_id not in claims:
+            raise GuardViolation(f"relation {relation.id} references missing claim")
+        if relation.object_id != contract.id:
+            raise GuardViolation(f"relation {relation.id} points to a different decision")
+        if relation.knowledge_state is HistoricalKnowledgeState.ESTABLISHED:
+            if not relation.evidence_refs or not relation.authorization_policy_version:
+                raise GuardViolation(
+                    f"established relation {relation.id} requires evidence and policy authorization"
+                )
+
+    for composition in contract.composition_states:
+        if not composition.relation_ids:
+            raise GuardViolation(f"composition {composition.id} requires relation refs")
+        if any(ref not in relations for ref in composition.relation_ids):
+            raise GuardViolation(f"composition {composition.id} references missing relation")
+        if not composition.target_ref.id or not composition.target_ref.version:
+            raise GuardViolation(f"composition {composition.id} requires versioned TargetRef")
+        if composition.kind is CompositionKind.SUFFICIENT_ALONE and len(composition.relation_ids) != 1:
+            raise GuardViolation("SUFFICIENT_ALONE composition must concern exactly one relation")
+        established = composition.value in (
+            CompositionValue.ESTABLISHED_TRUE,
+            CompositionValue.ESTABLISHED_FALSE,
+        )
+        if established:
+            auth = composition.authorization
+            if auth is None:
+                raise GuardViolation(
+                    f"established composition {composition.id} requires authorization record"
+                )
+            if auth.status is not AuthorizationStatus.AUTHORIZED:
+                raise GuardViolation("established composition authorization is not AUTHORIZED")
+            if auth.authorized_value is not composition.value:
+                raise GuardViolation("composition value differs from authorized value")
+            if not auth.evidence_refs or not auth.policy_version:
+                raise GuardViolation("composition authorization requires evidence and policy version")
+        elif composition.authorization is not None:
+            raise GuardViolation("unresolved composition must not carry TRUE/FALSE authorization")
+
+    for rule in contract.current_match_rules:
+        claim = claims.get(rule.premise_id)
+        if claim is None:
+            raise GuardViolation(f"current-match rule {rule.id} references missing premise")
+        if claim.current_metric_key != rule.condition.metric_key:
+            raise GuardViolation(
+                f"current-match rule {rule.id} metric does not match claim current_metric_key"
+            )
+        _validate_condition(rule.id, rule.condition)
+
+    for rule in contract.revisit_rules:
+        _validate_condition(rule.id, rule.condition)
+
+    return ValidatedDecisionContract(contract=contract)
 
 
 def validate_observation(observation: NumericObservation, spec: MetricSpec) -> None:
@@ -117,6 +246,7 @@ def apply_world_event(
     event: WorldEvent,
     metric_specs: Mapping[str, MetricSpec],
 ) -> CanonicalWorldState:
+    """Apply a typed event delta. Event authorization itself is introduced with M2."""
     validate_world_state(state, metric_specs)
     event_keys: set[str] = set()
     for observation in event.observations:
@@ -130,7 +260,7 @@ def apply_world_event(
 
     merged = {observation.metric_key: observation for observation in state.observations}
     for observation in event.observations:
-        merged[observation.metric_key] = observation
+        merged[observation.metric_key] = replace(observation, source_event_id=event.id)
     return CanonicalWorldState(observations=tuple(merged[key] for key in sorted(merged)))
 
 
@@ -168,15 +298,26 @@ def semantic_impact(
     rechecked = rules_requiring_recheck(contract, event)
     changed: list[str] = []
     for rule in contract.current_match_rules:
-        if rule.id in rechecked and evaluate_current_match(rule, before_state) != evaluate_current_match(rule, after_state):
+        if (
+            rule.id in rechecked
+            and evaluate_current_match(rule, before_state)
+            != evaluate_current_match(rule, after_state)
+        ):
             changed.append(rule.id)
     for rule in contract.revisit_rules:
-        if rule.id in rechecked and evaluate_revisit(rule, before_state) != evaluate_revisit(rule, after_state):
+        if (
+            rule.id in rechecked
+            and evaluate_revisit(rule, before_state)
+            != evaluate_revisit(rule, after_state)
+        ):
             changed.append(rule.id)
     return SemanticImpact(tuple(rechecked), tuple(changed))
 
 
-def _validate_binding(contract: DecisionContract, binding: TargetSupportBinding) -> HistoricalRelation:
+def _validate_binding(
+    contract: DecisionContract,
+    binding: TargetSupportBinding,
+) -> HistoricalRelation:
     try:
         relation = contract.relation(binding.historical_relation_id)
         rule = contract.match_rule(binding.current_match_rule_id)
@@ -187,50 +328,72 @@ def _validate_binding(contract: DecisionContract, binding: TargetSupportBinding)
         raise GuardViolation("target binding relation is not HISTORICAL_SUPPORT")
     if relation.object_id != contract.id:
         raise GuardViolation("historical support points to a different decision")
-    if rule.premise_id != claim.id:
-        raise GuardViolation("current-match rule does not evaluate the support premise")
-    if relation.subject_id != rule.premise_id:
+    if rule.premise_id != claim.id or relation.subject_id != rule.premise_id:
         raise GuardViolation("historical support and current-match rule reference different premises")
+    if claim.current_metric_key != rule.condition.metric_key:
+        raise GuardViolation("bound current-match rule evaluates the wrong metric for its claim")
     return relation
 
 
 def validate_target_against_contract(
     *,
-    contract: DecisionContract,
+    contract: ValidatedDecisionContract,
     target: SafeReuseTargetSpec,
 ) -> None:
+    raw = contract.contract
     if not target.surviving_bindings:
         raise GuardViolation("safe-reuse target requires at least one surviving support binding")
+
     all_bindings = (*target.changed_bindings, *target.surviving_bindings)
+    binding_pairs = tuple(
+        (binding.historical_relation_id, binding.current_match_rule_id)
+        for binding in all_bindings
+    )
+    if len(binding_pairs) != len(set(binding_pairs)):
+        raise GuardViolation("TargetSpec contains duplicate support bindings")
+    changed_relations = {binding.historical_relation_id for binding in target.changed_bindings}
+    surviving_relations = {binding.historical_relation_id for binding in target.surviving_bindings}
+    if changed_relations & surviving_relations:
+        raise GuardViolation("same historical relation cannot be both changed and surviving")
+
     for binding in all_bindings:
-        _validate_binding(contract, binding)
+        _validate_binding(raw, binding)
+    if len(target.revisit_rule_ids) != len(set(target.revisit_rule_ids)):
+        raise GuardViolation("TargetSpec contains duplicate revisit rule ids")
     for revisit_id in target.revisit_rule_ids:
         try:
-            contract.revisit_rule(revisit_id)
+            raw.revisit_rule(revisit_id)
         except StopIteration as exc:
             raise GuardViolation("target references missing revisit rule") from exc
 
     try:
-        composition = contract.composition(target.limiting_composition_id)
+        composition = raw.composition(target.limiting_composition_id)
     except StopIteration as exc:
         raise GuardViolation("target references missing composition") from exc
-    if composition.target_id != target.id:
-        raise GuardViolation("composition is scoped to a different TargetSpec")
+    if composition.target_ref != target.ref:
+        raise GuardViolation("composition is scoped to a different TargetSpec id/version")
     if composition.kind is not CompositionKind.SUFFICIENT_ALONE:
         raise GuardViolation("V1 safe-reuse target requires SUFFICIENT_ALONE composition")
-    surviving_relation_ids = tuple(binding.historical_relation_id for binding in target.surviving_bindings)
+    surviving_relation_ids = tuple(
+        binding.historical_relation_id for binding in target.surviving_bindings
+    )
     if composition.relation_ids != surviving_relation_ids:
-        raise GuardViolation("composition does not concern exactly the surviving support relations")
+        raise GuardViolation(
+            "composition does not concern exactly the surviving support relations"
+        )
 
 
 def evaluate_safe_reuse(
     *,
-    contract: DecisionContract,
+    contract: ValidatedDecisionContract,
     match_results: Dict[str, MatchResult],
     revisit_results: Dict[str, RevisitResult],
     target: SafeReuseTargetSpec,
 ) -> SafeReuseEvaluation:
+    if not isinstance(contract, ValidatedDecisionContract):
+        raise GuardViolation("evaluation requires ValidatedDecisionContract")
     validate_target_against_contract(contract=contract, target=target)
+    raw = contract.contract
 
     def require_match(rule_id: str) -> MatchResult:
         if rule_id not in match_results:
@@ -242,8 +405,28 @@ def evaluate_safe_reuse(
             raise GuardViolation(f"missing revisit result for target rule {rule_id}")
         return revisit_results[rule_id]
 
-    changed_states = tuple(require_match(binding.current_match_rule_id) for binding in target.changed_bindings)
-    surviving_states = tuple(require_match(binding.current_match_rule_id) for binding in target.surviving_bindings)
+    all_bindings = (*target.changed_bindings, *target.surviving_bindings)
+    bound_relations = tuple(
+        raw.relation(binding.historical_relation_id) for binding in all_bindings
+    )
+    unestablished = tuple(
+        relation.id
+        for relation in bound_relations
+        if relation.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED
+    )
+    if unestablished:
+        return SafeReuseEvaluation(
+            result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
+            limiting_relations=unestablished,
+            reason_codes=("TARGET_HISTORICAL_ROLE_NOT_ESTABLISHED",),
+        )
+
+    changed_states = tuple(
+        require_match(binding.current_match_rule_id) for binding in target.changed_bindings
+    )
+    surviving_states = tuple(
+        require_match(binding.current_match_rule_id) for binding in target.surviving_bindings
+    )
     revisit_states = tuple(require_revisit(rule_id) for rule_id in target.revisit_rule_ids)
 
     if any(state is MatchResult.UNKNOWN for state in (*changed_states, *surviving_states)):
@@ -259,36 +442,30 @@ def evaluate_safe_reuse(
             reason_codes=("TARGET_REVISIT_STATE_UNKNOWN",),
         )
 
+    if any(state is MatchResult.DOES_NOT_MATCH for state in surviving_states):
+        return SafeReuseEvaluation(
+            result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
+            limiting_relations=tuple(
+                binding.historical_relation_id for binding in target.surviving_bindings
+            ),
+            reason_codes=("REQUIRED_SURVIVING_SUPPORT_DOES_NOT_MATCH",),
+        )
+
     relevant_change = (
         any(state is MatchResult.DOES_NOT_MATCH for state in changed_states)
         or any(state is RevisitResult.TRIGGERED for state in revisit_states)
     )
     if not relevant_change:
+        # Composition C1 only becomes necessary once the support structure relevant to
+        # this TargetSpec actually changes. We still require all bound historical roles
+        # and surviving current matches before this positive result.
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_AUTHORIZED,
             limiting_relations=(),
             reason_codes=("NO_TARGET_RELEVANT_CHANGE",),
         )
 
-    surviving_relations = tuple(
-        contract.relation(binding.historical_relation_id)
-        for binding in target.surviving_bindings
-    )
-    if any(relation.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED for relation in surviving_relations):
-        return SafeReuseEvaluation(
-            result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=tuple(relation.id for relation in surviving_relations if relation.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED),
-            reason_codes=("SURVIVING_HISTORICAL_ROLE_NOT_ESTABLISHED",),
-        )
-
-    if any(state is MatchResult.DOES_NOT_MATCH for state in surviving_states):
-        return SafeReuseEvaluation(
-            result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=tuple(binding.historical_relation_id for binding in target.surviving_bindings),
-            reason_codes=("REQUIRED_SURVIVING_SUPPORT_DOES_NOT_MATCH",),
-        )
-
-    composition = contract.composition(target.limiting_composition_id)
+    composition = raw.composition(target.limiting_composition_id)
     if composition.value is CompositionValue.ESTABLISHED_TRUE:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_AUTHORIZED,
