@@ -131,6 +131,7 @@ class MetricSpec:
 class NumericObservation:
     metric_key: str
     value: float
+    unit: str
     window_days: Optional[int] = None
 
 
