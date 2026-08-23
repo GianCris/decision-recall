@@ -1,8 +1,10 @@
 import unittest
+from dataclasses import replace
 
 from decision_recall.domain import (
     AuthorizationDecision,
     AuthorizationStatus,
+    CompositionValue,
     EvidenceRecord,
     MatchResult,
     NumericObservation,
@@ -77,6 +79,35 @@ class Milestone1GoldenTests(unittest.TestCase):
         self.assertEqual(matches["M1"], MatchResult.DOES_NOT_MATCH)
         self.assertEqual(matches["M2"], MatchResult.DOES_NOT_MATCH)
         self.assertEqual(contract.historical_relations, before_relations)
+
+    def test_surviving_support_must_match_even_if_composition_is_true(self):
+        contract = supplier_resilience_contract()
+        c1_true = replace(
+            contract.composition_states[0],
+            value=CompositionValue.ESTABLISHED_TRUE,
+        )
+        contract = replace(contract, composition_states=(c1_true,))
+        event = golden_event(beacon_days=1)
+        matches = {
+            rule.id: evaluate_current_match(rule, event)
+            for rule in contract.current_match_rules
+        }
+        revisits = {
+            rule.id: evaluate_revisit(rule, event)
+            for rule in contract.revisit_rules
+        }
+        result = evaluate_safe_reuse(
+            contract=contract,
+            match_results=matches,
+            revisit_results=revisits,
+            target=safe_reuse_target_v1(),
+        )
+
+        self.assertEqual(result.result, SafeReuseResult.REUSE_NOT_AUTHORIZED)
+        self.assertEqual(
+            result.reason_codes,
+            ("REQUIRED_SURVIVING_SUPPORT_DOES_NOT_MATCH",),
+        )
 
     def test_irrelevant_event_has_zero_relevant_rules(self):
         contract = supplier_resilience_contract()
