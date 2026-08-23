@@ -1,5 +1,6 @@
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from decision_recall.domain import CompositionValue, HistoricalKnowledgeState, NumericObservation, ProvenanceType
@@ -61,6 +62,7 @@ class PostgresTemporalLedgerTests(unittest.TestCase):
 
     def tearDown(self):
         self.ledger.drop_schema()
+        self.ledger.engine.dispose()
 
     def test_atomic_evidence_authorization_commit_batch_round_trips(self):
         r2 = evidence("E-R2", "R2", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE)
@@ -220,6 +222,26 @@ class PostgresTemporalLedgerTests(unittest.TestCase):
             )
         self.assertEqual(self.ledger.head_seq, 0)
         self.assertEqual(self.ledger.entries_as_of(0), ())
+
+    def test_concurrent_appends_receive_unique_monotonic_batch_sequences(self):
+        def append_one(index):
+            record = evidence(
+                f"E-CONCURRENT-{index}",
+                f"F-CONCURRENT-{index}",
+                AuthorizedAssertion.ESTABLISHED_FACT,
+                content=f"concurrent evidence {index}",
+            )
+            return self.ledger.append_batch(
+                recorded_at=T0 + timedelta(seconds=index),
+                entries=(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, record),),
+            ).batch_seq
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            seqs = sorted(pool.map(append_one, (1, 2)))
+
+        self.assertEqual(seqs, [1, 2])
+        self.assertEqual(self.ledger.head_seq, 2)
+        self.assertEqual(len(self.ledger.entries_as_of(2)), 2)
 
 
 if __name__ == "__main__":
