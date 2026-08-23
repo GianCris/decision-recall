@@ -12,8 +12,16 @@ class HistoricalKnowledgeState(str, Enum):
     CURRENTLY_UNDETERMINED = "currently_undetermined"
 
 
+class ClaimType(str, Enum):
+    FACT = "fact"
+
+
 class RelationType(str, Enum):
     HISTORICAL_SUPPORT = "historical_support"
+
+
+class CompositionKind(str, Enum):
+    SUFFICIENT_ALONE = "sufficient_alone"
 
 
 class AuthorizationStatus(str, Enum):
@@ -53,6 +61,14 @@ class EvidenceRecord:
     id: str
     content: str
     provenance_type: str
+
+
+@dataclass(frozen=True)
+class Claim:
+    id: str
+    claim_type: ClaimType
+    predicate_key: str
+    evidence_refs: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -97,8 +113,18 @@ class HistoricalRelation:
 @dataclass(frozen=True)
 class CompositionState:
     id: str
-    description: str
+    kind: CompositionKind
+    relation_ids: Tuple[str, ...]
+    target_id: str
     value: CompositionValue
+
+
+@dataclass(frozen=True)
+class MetricSpec:
+    key: str
+    unit: str
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +132,17 @@ class NumericObservation:
     metric_key: str
     value: float
     window_days: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class CanonicalWorldState:
+    observations: Tuple[NumericObservation, ...]
+
+    def observation(self, metric_key: str) -> Optional[NumericObservation]:
+        matches = tuple(o for o in self.observations if o.metric_key == metric_key)
+        if len(matches) > 1:
+            raise ValueError(f"duplicate metric in world state: {metric_key}")
+        return matches[0] if matches else None
 
 
 @dataclass(frozen=True)
@@ -121,15 +158,13 @@ class ThresholdCondition:
     threshold: float
     minimum_window_days: Optional[int] = None
 
-    def evaluate(self, event: WorldEvent) -> Optional[bool]:
-        obs = next((o for o in event.observations if o.metric_key == self.metric_key), None)
+    def evaluate(self, state: CanonicalWorldState) -> Optional[bool]:
+        obs = state.observation(self.metric_key)
         if obs is None:
             return None
         if self.minimum_window_days is not None:
-            if obs.window_days is None:
+            if obs.window_days is None or obs.window_days < self.minimum_window_days:
                 return None
-            if obs.window_days < self.minimum_window_days:
-                return False
         if self.operator == ">=":
             return obs.value >= self.threshold
         if self.operator == "<=":
@@ -146,7 +181,7 @@ class ThresholdCondition:
 @dataclass(frozen=True)
 class CurrentMatchRule:
     id: str
-    historical_relation_id: str
+    premise_id: str
     condition: ThresholdCondition
     match_when_condition_true: bool
 
@@ -158,11 +193,17 @@ class RevisitRule:
 
 
 @dataclass(frozen=True)
+class TargetSupportBinding:
+    historical_relation_id: str
+    current_match_rule_id: str
+
+
+@dataclass(frozen=True)
 class SafeReuseTargetSpec:
     id: str
     version: str
-    changed_match_rule_ids: Tuple[str, ...]
-    surviving_match_rule_ids: Tuple[str, ...]
+    changed_bindings: Tuple[TargetSupportBinding, ...]
+    surviving_bindings: Tuple[TargetSupportBinding, ...]
     revisit_rule_ids: Tuple[str, ...]
     limiting_composition_id: str
 
@@ -171,13 +212,23 @@ class SafeReuseTargetSpec:
 class DecisionContract:
     id: str
     action: str
+    claims: Tuple[Claim, ...]
     historical_relations: Tuple[HistoricalRelation, ...]
     composition_states: Tuple[CompositionState, ...]
     current_match_rules: Tuple[CurrentMatchRule, ...]
     revisit_rules: Tuple[RevisitRule, ...]
 
+    def claim(self, claim_id: str) -> Claim:
+        return next(c for c in self.claims if c.id == claim_id)
+
     def relation(self, relation_id: str) -> HistoricalRelation:
         return next(r for r in self.historical_relations if r.id == relation_id)
+
+    def match_rule(self, rule_id: str) -> CurrentMatchRule:
+        return next(r for r in self.current_match_rules if r.id == rule_id)
+
+    def revisit_rule(self, rule_id: str) -> RevisitRule:
+        return next(r for r in self.revisit_rules if r.id == rule_id)
 
     def composition(self, composition_id: str) -> CompositionState:
         return next(c for c in self.composition_states if c.id == composition_id)
