@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dr-bench"
+name = "decision-recall"
 version = "0.1.0"
-description = "A mechanism-agnostic benchmark for decision recovery"
+description = "Temporal epistemic control for long-running AI decisions, with DR-Bench evaluation tooling"
 requires-python = ">=3.11"
 dependencies = [
   "google-auth==2.56.3",
