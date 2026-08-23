@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from hashlib import sha256
 import json
@@ -19,7 +19,7 @@ from .domain import (
 
 
 class TemporalIntegrityError(ValueError):
-    """Raised when a temporal/authority invariant would be violated."""
+    """Raised when a temporal, authority, or replay invariant would be violated."""
 
 
 class TemporalReferenceKind(str, Enum):
@@ -79,7 +79,6 @@ class AuthorizedAssertion(str, Enum):
     T0_UNRESOLVED = "t0_unresolved"
     CURRENT_MATCH_RULE = "current_match_rule"
     REVISIT_RULE = "revisit_rule"
-    WORLD_EVENT = "world_event"
 
 
 class LedgerEntryKind(str, Enum):
@@ -88,6 +87,7 @@ class LedgerEntryKind(str, Enum):
     DECISION_COMMIT = "decision_commit"
     EVALUATION = "evaluation"
     RAW_WORLD_EVIDENCE = "raw_world_evidence"
+    WORLD_EVENT_AUTHORIZATION = "world_event_authorization"
     CORRECTION = "correction"
 
 
@@ -120,8 +120,10 @@ class TemporalEvidenceRecord:
         if not self.source_content_hash.strip():
             raise TemporalIntegrityError("source_content_hash is required")
         self.temporal_reference.validate()
-        assertion_keys = tuple((item.entity_id, item.assertion) for item in self.candidate_assertions)
-        if len(assertion_keys) != len(set(assertion_keys)):
+        keys = tuple((item.entity_id, item.assertion) for item in self.candidate_assertions)
+        if any(not item.entity_id.strip() for item in self.candidate_assertions):
+            raise TemporalIntegrityError("candidate assertion entity_id is required")
+        if len(keys) != len(set(keys)):
             raise TemporalIntegrityError("duplicate candidate assertion in evidence")
 
 
@@ -188,8 +190,30 @@ class RawWorldEvidence:
             raise TemporalIntegrityError("world evidence source lineage is required")
         self.temporal_reference.validate()
         keys = tuple(obs.metric_key for obs in self.observations)
+        if not self.observations:
+            raise TemporalIntegrityError("world evidence requires at least one observation")
         if len(keys) != len(set(keys)):
             raise TemporalIntegrityError("raw world evidence has duplicate metric keys")
+
+
+@dataclass(frozen=True)
+class WorldEventAuthorizationRecord:
+    id: str
+    raw_evidence_id: str
+    event_id: str
+    policy_version: str
+    policy_hash: str
+
+    def validate(self) -> None:
+        fields = (
+            self.id,
+            self.raw_evidence_id,
+            self.event_id,
+            self.policy_version,
+            self.policy_hash,
+        )
+        if any(not item.strip() for item in fields):
+            raise TemporalIntegrityError("world-event authorization fields are required")
 
 
 @dataclass(frozen=True)
@@ -205,6 +229,7 @@ LedgerPayload = Union[
     DecisionCommitRecord,
     EvaluationSnapshot,
     RawWorldEvidence,
+    WorldEventAuthorizationRecord,
     CorrectionRecord,
 ]
 
@@ -233,7 +258,7 @@ class LedgerBatch:
 
 
 class InMemoryTemporalLedger:
-    """Append-only batch ledger used to freeze M2 semantics before PostgreSQL.
+    """Append-only atomic-batch ledger used to freeze M2 semantics before PostgreSQL.
 
     A cutoff is always a batch_seq. There is intentionally no supported view that
     cuts through the middle of a batch, so evidence + authorization + commit can be
@@ -258,7 +283,6 @@ class InMemoryTemporalLedger:
         if not entries:
             raise TemporalIntegrityError("ledger batch cannot be empty")
 
-        # Validate everything before mutation to preserve atomicity in memory.
         local_ids: set[str] = set()
         for pending in entries:
             entry_id = _payload_id(pending.payload)
@@ -266,6 +290,43 @@ class InMemoryTemporalLedger:
                 raise TemporalIntegrityError(f"duplicate ledger entry id: {entry_id}")
             local_ids.add(entry_id)
             _validate_payload(pending.kind, pending.payload)
+
+        existing_by_id = {entry.entry_id: entry for entry in self.entries_as_of(self.head_seq)}
+        local_by_id = {_payload_id(item.payload): item for item in entries}
+        visible_ids = set(existing_by_id) | set(local_by_id)
+
+        for pending in entries:
+            payload = pending.payload
+            if isinstance(payload, AuthorizationRecord):
+                if any(evidence_id not in visible_ids for evidence_id in payload.evidence_ids):
+                    raise TemporalIntegrityError("authorization references unavailable evidence")
+                for evidence_id in payload.evidence_ids:
+                    referenced = local_by_id.get(evidence_id)
+                    if referenced is not None and referenced.kind is not LedgerEntryKind.EVIDENCE:
+                        raise TemporalIntegrityError("authorization evidence ref is not an evidence record")
+                    existing = existing_by_id.get(evidence_id)
+                    if existing is not None and existing.kind is not LedgerEntryKind.EVIDENCE:
+                        raise TemporalIntegrityError("authorization evidence ref is not an evidence record")
+            elif isinstance(payload, WorldEventAuthorizationRecord):
+                if payload.raw_evidence_id not in visible_ids:
+                    raise TemporalIntegrityError("world authorization references unavailable raw evidence")
+                referenced = local_by_id.get(payload.raw_evidence_id)
+                if referenced is not None and referenced.kind is not LedgerEntryKind.RAW_WORLD_EVIDENCE:
+                    raise TemporalIntegrityError("world authorization raw ref has wrong kind")
+                existing = existing_by_id.get(payload.raw_evidence_id)
+                if existing is not None and existing.kind is not LedgerEntryKind.RAW_WORLD_EVIDENCE:
+                    raise TemporalIntegrityError("world authorization raw ref has wrong kind")
+            elif isinstance(payload, CorrectionRecord):
+                # Corrections are about already-recorded history; they cannot correct
+                # a sibling entry that did not exist before this atomic batch.
+                if payload.corrects_entry_id not in existing_by_id:
+                    raise TemporalIntegrityError("correction target must pre-exist this batch")
+                if existing_by_id[payload.corrects_entry_id].kind is LedgerEntryKind.CORRECTION:
+                    raise TemporalIntegrityError("V1 does not support correction-of-correction")
+            elif isinstance(payload, EvaluationSnapshot):
+                # Evaluation inputs are frozen before the output batch starts.
+                if payload.input_cutoff_seq > self.head_seq:
+                    raise TemporalIntegrityError("evaluation input cutoff cannot include its own output batch")
 
         batch_seq = self.head_seq + 1
         ledger_entries = tuple(
@@ -292,6 +353,21 @@ class InMemoryTemporalLedger:
             for batch in self._batches
             if batch.batch_seq <= cutoff_seq
             for entry in batch.entries
+        )
+
+    def effective_entries_as_of(self, cutoff_seq: int) -> Tuple[LedgerEntry, ...]:
+        entries = self.entries_as_of(cutoff_seq)
+        corrected_ids = {
+            entry.payload.corrects_entry_id
+            for entry in entries
+            if entry.kind is LedgerEntryKind.CORRECTION
+            and isinstance(entry.payload, CorrectionRecord)
+        }
+        return tuple(
+            entry
+            for entry in entries
+            if entry.entry_id not in corrected_ids
+            and entry.kind is not LedgerEntryKind.CORRECTION
         )
 
     def entry(self, entry_id: str) -> LedgerEntry:
@@ -342,29 +418,20 @@ class EventPolicy:
         *,
         raw: RawWorldEvidence,
         metric_specs: Mapping[str, MetricSpec],
-    ) -> "AuthorizedWorldEvent":
+        authorization_id: Optional[str] = None,
+        event_id: Optional[str] = None,
+    ) -> WorldEventAuthorizationRecord:
         raw.validate()
         if raw.provenance_type not in self.allowed_provenance:
             raise TemporalIntegrityError("world evidence provenance is not authorized")
         _validate_world_observations(raw.observations, metric_specs)
-        return AuthorizedWorldEvent(
-            id=f"AUTH-WORLD-{raw.id}",
+        return WorldEventAuthorizationRecord(
+            id=authorization_id or f"AUTH-WORLD-{raw.id}",
             raw_evidence_id=raw.id,
-            observations=tuple(raw.observations),
-            temporal_reference=raw.temporal_reference,
+            event_id=event_id or f"WORLD-{raw.id}",
             policy_version=self.version,
             policy_hash=self.policy_hash,
         )
-
-
-@dataclass(frozen=True)
-class AuthorizedWorldEvent:
-    id: str
-    raw_evidence_id: str
-    observations: Tuple[NumericObservation, ...]
-    temporal_reference: TemporalReference
-    policy_version: str
-    policy_hash: str
 
 
 @dataclass(frozen=True)
@@ -377,6 +444,7 @@ class RecordedHistoricalView:
 
     def relation_state(self, entity_id: str) -> HistoricalKnowledgeState:
         assertions = self.assertions_for(entity_id)
+        _reject_conflicting_history(entity_id, assertions)
         if AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE in assertions:
             return HistoricalKnowledgeState.ESTABLISHED
         if AuthorizedAssertion.T0_UNRESOLVED in assertions:
@@ -385,6 +453,7 @@ class RecordedHistoricalView:
 
     def composition_state(self, entity_id: str) -> CompositionValue:
         assertions = self.assertions_for(entity_id)
+        _reject_conflicting_history(entity_id, assertions)
         if AuthorizedAssertion.COMPOSITION_TRUE in assertions:
             return CompositionValue.ESTABLISHED_TRUE
         if AuthorizedAssertion.COMPOSITION_FALSE in assertions:
@@ -398,12 +467,14 @@ def recorded_historical_view(
     ledger: InMemoryTemporalLedger,
     *,
     cutoff_seq: int,
+    policies: Mapping[Tuple[str, str], AuthorityPolicy],
 ) -> RecordedHistoricalView:
-    entries = ledger.entries_as_of(cutoff_seq)
+    entries = ledger.effective_entries_as_of(cutoff_seq)
     evidence_by_id = {
-        entry.entry_id: entry
+        entry.entry_id: entry.payload
         for entry in entries
         if entry.kind is LedgerEntryKind.EVIDENCE
+        and isinstance(entry.payload, TemporalEvidenceRecord)
     }
     assertions: list[Tuple[str, AuthorizedAssertion]] = []
     for entry in entries:
@@ -412,19 +483,33 @@ def recorded_historical_view(
         auth = entry.payload
         assert isinstance(auth, AuthorizationRecord)
         auth.validate()
+        policy = policies.get((auth.policy_version, auth.policy_hash))
+        if policy is None:
+            raise TemporalIntegrityError("authorization references unknown policy version/hash")
+        candidate = CandidateAssertion(auth.entity_id, auth.authorized_assertion)
         for evidence_id in auth.evidence_ids:
-            evidence_entry = evidence_by_id.get(evidence_id)
-            if evidence_entry is None:
-                raise TemporalIntegrityError(
-                    "authorization is visible before its evidence in the same as-of view"
-                )
-            evidence = evidence_entry.payload
-            assert isinstance(evidence, TemporalEvidenceRecord)
-            expected = CandidateAssertion(auth.entity_id, auth.authorized_assertion)
-            if expected not in evidence.candidate_assertions:
-                raise TemporalIntegrityError("authorization assertion is not grounded by cited evidence")
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None:
+                raise TemporalIntegrityError("authorization is visible without its evidence in as-of view")
+            # Re-check that the persisted authorization is exactly reproducible under
+            # the referenced policy; metadata alone cannot establish authority.
+            replayed = policy.authorize_candidate(
+                evidence=evidence,
+                candidate=candidate,
+                authorization_id=auth.id,
+            )
+            if (
+                replayed.entity_id != auth.entity_id
+                or replayed.authorized_assertion is not auth.authorized_assertion
+                or replayed.policy_version != auth.policy_version
+                or replayed.policy_hash != auth.policy_hash
+            ):
+                raise TemporalIntegrityError("persisted authorization does not replay")
         assertions.append((auth.entity_id, auth.authorized_assertion))
-    return RecordedHistoricalView(cutoff_seq=cutoff_seq, assertions=tuple(sorted(assertions)))
+    return RecordedHistoricalView(
+        cutoff_seq=cutoff_seq,
+        assertions=tuple(sorted(set(assertions), key=lambda item: (item[0], item[1].value))),
+    )
 
 
 def current_assessment_candidates_about(
@@ -435,7 +520,7 @@ def current_assessment_candidates_about(
 ) -> Tuple[Tuple[str, CandidateAssertion, ProvenanceType], ...]:
     """Evidence visible now about an entity, without rewriting the recorded t0 view."""
     results = []
-    for entry in ledger.entries_as_of(cutoff_seq):
+    for entry in ledger.effective_entries_as_of(cutoff_seq):
         if entry.kind is not LedgerEntryKind.EVIDENCE:
             continue
         evidence = entry.payload
@@ -454,11 +539,11 @@ def replay_authority_from_evidence(
 ) -> Tuple[Tuple[str, AuthorizedAssertion], ...]:
     """Deterministically recompute evaluation-time authority from available evidence.
 
-    The generated authorizations are evaluation outputs; they need not pre-exist the
-    input cutoff. Only their input evidence must be visible by input_cutoff_seq.
+    These are evaluation outputs; they need not pre-exist the input cutoff. Only the
+    input evidence must be visible by input_cutoff_seq.
     """
     authorized: list[Tuple[str, AuthorizedAssertion]] = []
-    for entry in ledger.entries_as_of(input_cutoff_seq):
+    for entry in ledger.effective_entries_as_of(input_cutoff_seq):
         if entry.kind is not LedgerEntryKind.EVIDENCE:
             continue
         evidence = entry.payload
@@ -473,54 +558,77 @@ def replay_authority_from_evidence(
             except TemporalIntegrityError:
                 continue
             authorized.append((candidate.entity_id, candidate.assertion))
-    return tuple(sorted(set(authorized)))
+    return tuple(sorted(set(authorized), key=lambda item: (item[0], item[1].value)))
 
 
 def authorized_world_state_as_of(
     ledger: InMemoryTemporalLedger,
     *,
     cutoff_seq: int,
-    policy: EventPolicy,
+    policies: Mapping[Tuple[str, str], EventPolicy],
     metric_specs: Mapping[str, MetricSpec],
 ) -> CanonicalWorldState:
-    """Build a deterministic current-world view from raw evidence visible at cutoff.
+    """Build current-world view only from raw evidence with visible first-class auth.
 
     V1 precedence: for each metric choose the authorized observation whose temporal
     reference has the latest effective time; break exact temporal ties by later
-    ledger batch/ordinal. Late-arriving older evidence therefore does not overwrite a
+    ledger batch/ordinal. Late-arriving older evidence therefore cannot overwrite a
     newer-world observation merely because it was ingested later.
     """
-    chosen: dict[str, tuple[datetime, int, int, NumericObservation, str]] = {}
-    for entry in ledger.entries_as_of(cutoff_seq):
-        if entry.kind is not LedgerEntryKind.RAW_WORLD_EVIDENCE:
-            continue
-        raw = entry.payload
+    entries = ledger.effective_entries_as_of(cutoff_seq)
+    raw_by_id = {
+        entry.entry_id: entry
+        for entry in entries
+        if entry.kind is LedgerEntryKind.RAW_WORLD_EVIDENCE
+    }
+    authorizations = [
+        entry
+        for entry in entries
+        if entry.kind is LedgerEntryKind.WORLD_EVENT_AUTHORIZATION
+    ]
+    chosen: dict[str, tuple[datetime, int, int, NumericObservation]] = {}
+    seen_raw_auth: set[str] = set()
+    for auth_entry in authorizations:
+        auth = auth_entry.payload
+        assert isinstance(auth, WorldEventAuthorizationRecord)
+        auth.validate()
+        if auth.raw_evidence_id in seen_raw_auth:
+            raise TemporalIntegrityError("multiple active world authorizations for same raw evidence")
+        seen_raw_auth.add(auth.raw_evidence_id)
+        raw_entry = raw_by_id.get(auth.raw_evidence_id)
+        if raw_entry is None:
+            raise TemporalIntegrityError("world authorization visible without raw evidence")
+        raw = raw_entry.payload
         assert isinstance(raw, RawWorldEvidence)
-        try:
-            event = policy.authorize(raw=raw, metric_specs=metric_specs)
-        except TemporalIntegrityError:
-            continue
-        effective_at = event.temporal_reference.effective_at()
-        for observation in event.observations:
-            candidate_key = (effective_at, entry.batch_seq, entry.entry_ordinal)
+        policy = policies.get((auth.policy_version, auth.policy_hash))
+        if policy is None:
+            raise TemporalIntegrityError("world authorization references unknown policy version/hash")
+        replayed = policy.authorize(
+            raw=raw,
+            metric_specs=metric_specs,
+            authorization_id=auth.id,
+            event_id=auth.event_id,
+        )
+        if replayed != auth:
+            raise TemporalIntegrityError("persisted world authorization does not replay")
+        effective_at = raw.temporal_reference.effective_at()
+        for observation in raw.observations:
+            candidate_key = (effective_at, auth_entry.batch_seq, auth_entry.entry_ordinal)
             previous = chosen.get(observation.metric_key)
             if previous is None or candidate_key > previous[:3]:
                 chosen[observation.metric_key] = (
                     effective_at,
-                    entry.batch_seq,
-                    entry.entry_ordinal,
+                    auth_entry.batch_seq,
+                    auth_entry.entry_ordinal,
                     NumericObservation(
                         metric_key=observation.metric_key,
                         value=observation.value,
                         unit=observation.unit,
                         window_days=observation.window_days,
-                        source_event_id=event.id,
+                        source_event_id=auth.event_id,
                     ),
-                    raw.id,
                 )
-    return CanonicalWorldState(
-        observations=tuple(chosen[key][3] for key in sorted(chosen))
-    )
+    return CanonicalWorldState(observations=tuple(chosen[key][3] for key in sorted(chosen)))
 
 
 def canonical_replay_fingerprint(
@@ -552,54 +660,44 @@ def canonical_replay_fingerprint(
 
 
 def authority_policy_v1() -> AuthorityPolicy:
+    allowed = {
+        AuthorizedAssertion.ESTABLISHED_FACT: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.COMPOSITION_TRUE: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.COMPOSITION_FALSE: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.T0_UNRESOLVED: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.CURRENT_MATCH_RULE: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+        AuthorizedAssertion.REVISIT_RULE: (
+            ProvenanceType.CONTEMPORANEOUS_RECORD,
+            ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        ),
+    }
+    config = {
+        assertion.value: sorted(provenance.value for provenance in provenances)
+        for assertion, provenances in allowed.items()
+    }
     return AuthorityPolicy(
         version="AUTHORITY_V1",
-        policy_hash=_stable_hash(
-            {
-                "historical_role": [
-                    ProvenanceType.CONTEMPORANEOUS_RECORD.value,
-                    ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION.value,
-                ],
-                "t0_unresolved": [
-                    ProvenanceType.CONTEMPORANEOUS_RECORD.value,
-                    ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION.value,
-                ],
-                "composition": [
-                    ProvenanceType.CONTEMPORANEOUS_RECORD.value,
-                    ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION.value,
-                ],
-            }
-        ),
-        allowed_provenance={
-            AuthorizedAssertion.ESTABLISHED_FACT: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.COMPOSITION_TRUE: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.COMPOSITION_FALSE: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.T0_UNRESOLVED: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.CURRENT_MATCH_RULE: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-            AuthorizedAssertion.REVISIT_RULE: (
-                ProvenanceType.CONTEMPORANEOUS_RECORD,
-                ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-            ),
-        },
+        policy_hash=_stable_hash(config),
+        allowed_provenance=allowed,
     )
 
 
@@ -640,6 +738,7 @@ def _validate_payload(kind: LedgerEntryKind, payload: LedgerPayload) -> None:
         LedgerEntryKind.DECISION_COMMIT: DecisionCommitRecord,
         LedgerEntryKind.EVALUATION: EvaluationSnapshot,
         LedgerEntryKind.RAW_WORLD_EVIDENCE: RawWorldEvidence,
+        LedgerEntryKind.WORLD_EVENT_AUTHORIZATION: WorldEventAuthorizationRecord,
         LedgerEntryKind.CORRECTION: CorrectionRecord,
     }[kind]
     if not isinstance(payload, expected):
@@ -649,6 +748,8 @@ def _validate_payload(kind: LedgerEntryKind, payload: LedgerPayload) -> None:
     elif isinstance(payload, AuthorizationRecord):
         payload.validate()
     elif isinstance(payload, RawWorldEvidence):
+        payload.validate()
+    elif isinstance(payload, WorldEventAuthorizationRecord):
         payload.validate()
     elif isinstance(payload, DecisionCommitRecord):
         if not payload.id.strip() or not payload.decision_id.strip():
@@ -700,3 +801,24 @@ def _validate_world_observations(
             raise TemporalIntegrityError("world observation above allowed range")
         if observation.window_days is not None and observation.window_days < 0:
             raise TemporalIntegrityError("world observation window_days cannot be negative")
+
+
+def _reject_conflicting_history(
+    entity_id: str,
+    assertions: Tuple[AuthorizedAssertion, ...],
+) -> None:
+    incompatible_groups = (
+        {
+            AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE,
+            AuthorizedAssertion.T0_UNRESOLVED,
+        },
+        {
+            AuthorizedAssertion.COMPOSITION_TRUE,
+            AuthorizedAssertion.COMPOSITION_FALSE,
+            AuthorizedAssertion.T0_UNRESOLVED,
+        },
+    )
+    present = set(assertions)
+    for group in incompatible_groups:
+        if len(group & present) > 1:
+            raise TemporalIntegrityError(f"conflicting historical assertions for {entity_id}")
