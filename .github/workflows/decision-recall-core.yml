@@ -44,7 +44,7 @@ jobs:
       - name: Install repository package
         run: python -m pip install -e .
 
-      - name: Run deterministic/offline repository tests
+      - name: Run deterministic/offline repository regression excluding dedicated core suite
         shell: bash
         run: |
           python - <<'PY'
@@ -52,10 +52,12 @@ jobs:
           import subprocess
           import sys
 
-          # These historical-analysis suites intentionally depend on archived local
-          # experiment-output directories that are not committed to Git. They are
-          # not product regressions and cannot be reproduced on a clean CI runner.
-          artifact_dependent = {
+          # Historical-analysis suites below depend on archived local experiment
+          # outputs that are intentionally not committed. The dedicated core suite
+          # runs in the separate core-tests job, so exclude it here to keep counts
+          # disjoint and claims unambiguous.
+          excluded = {
+              'test_decision_recall_milestone1.py',
               'test_dev_autopsy.py',
               'test_pauto_provider_probe.py',
               'test_round_b_recovered_analysis.py',
@@ -64,9 +66,9 @@ jobs:
           files = [
               str(path)
               for path in sorted(Path('tests').glob('test_*.py'))
-              if path.name not in artifact_dependent
+              if path.name not in excluded
           ]
-          print('Offline regression files:', len(files))
+          print('Offline non-core regression files:', len(files))
           result = subprocess.run(
               [sys.executable, '-m', 'unittest', '-v', *files],
               check=False,
