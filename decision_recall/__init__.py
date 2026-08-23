@@ -1,4 +1,4 @@
-"""Decision Recall deterministic core (Milestone 1.2)."""
+"""Decision Recall deterministic core (Milestone 1.3)."""
 
 from .domain import (
     AuthorizationDecision,
@@ -37,12 +37,14 @@ from .engine import (
     GuardViolation,
     SafeReuseEvaluation,
     SemanticImpact,
+    TargetEvaluation,
     apply_world_event,
     authorize_composition,
     authorize_historical_role,
     evaluate_current_match,
     evaluate_revisit,
-    evaluate_safe_reuse,
+    evaluate_review,
+    evaluate_target,
     rules_requiring_recheck,
     semantic_impact,
     validate_contract,
@@ -93,6 +95,7 @@ __all__ = [
     "GuardViolation",
     "SafeReuseEvaluation",
     "SemanticImpact",
+    "TargetEvaluation",
     "apply_world_event",
     "authorize_composition",
     "authorize_historical_role",
@@ -100,7 +103,8 @@ __all__ = [
     "evidence_policy_v1",
     "evaluate_current_match",
     "evaluate_revisit",
-    "evaluate_safe_reuse",
+    "evaluate_review",
+    "evaluate_target",
     "rules_requiring_recheck",
     "semantic_impact",
     "validate_contract",
