@@ -21,7 +21,7 @@ dr-baseline-pilot = "dr_baselines.pilot:main"
 dr-baseline-dev = "dr_baselines.dev_experiment:main"
 
 [tool.setuptools.packages.find]
-include = ["dr_bench*", "dr_baselines*"]
+include = ["dr_bench*", "dr_baselines*", "decision_recall*"]
 
 [tool.setuptools.package-data]
 dr_bench = ["data/*.json", "data/*.jsonl", "schema/*.json"]
