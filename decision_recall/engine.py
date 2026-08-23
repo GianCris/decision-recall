@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Dict, Iterable, Mapping, Tuple
+from math import isfinite
+from typing import Iterable, Mapping, Tuple
 
 from .domain import (
     AuthorizationStatus,
@@ -38,8 +39,15 @@ class GuardViolation(ValueError):
 @dataclass(frozen=True)
 class SafeReuseEvaluation:
     result: SafeReuseResult
-    limiting_relations: Tuple[str, ...]
+    limiting_requirements: Tuple[str, ...]
     reason_codes: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TargetEvaluation:
+    safe_reuse: SafeReuseEvaluation
+    current_matches: Tuple[Tuple[str, MatchResult], ...]
+    review_states: Tuple[Tuple[str, RevisitResult], ...]
 
 
 @dataclass(frozen=True)
@@ -127,6 +135,8 @@ def _validate_condition(rule_name: str, condition) -> None:
         raise GuardViolation(f"{rule_name} uses unsupported operator")
     if condition.minimum_window_days is not None and condition.minimum_window_days < 0:
         raise GuardViolation(f"{rule_name} minimum_window_days cannot be negative")
+    if not isfinite(condition.threshold):
+        raise GuardViolation(f"{rule_name} threshold must be finite")
 
 
 def validate_contract(contract: DecisionContract) -> ValidatedDecisionContract:
@@ -140,12 +150,19 @@ def validate_contract(contract: DecisionContract) -> ValidatedDecisionContract:
     for name, ids in collections.items():
         _ensure_unique(name, ids)
 
-    all_entity_ids = tuple(item for ids in collections.values() for item in ids)
+    all_entity_ids = (contract.id, *(item for ids in collections.values() for item in ids))
     if len(all_entity_ids) != len(set(all_entity_ids)):
         raise GuardViolation("canonical entity ids must be globally unique within a contract")
 
     claims = {claim.id: claim for claim in contract.claims}
     relations = {relation.id: relation for relation in contract.historical_relations}
+
+    relation_semantics = tuple(
+        (relation.relation_type, relation.subject_id, relation.object_id)
+        for relation in contract.historical_relations
+    )
+    if len(relation_semantics) != len(set(relation_semantics)):
+        raise GuardViolation("duplicate semantic historical relation")
 
     for claim in contract.claims:
         if not claim.predicate_key or not claim.current_metric_key:
@@ -185,6 +202,8 @@ def validate_contract(contract: DecisionContract) -> ValidatedDecisionContract:
                 raise GuardViolation(
                     f"established composition {composition.id} requires authorization record"
                 )
+            if auth.candidate_id != composition.id:
+                raise GuardViolation("composition authorization candidate_id mismatch")
             if auth.status is not AuthorizationStatus.AUTHORIZED:
                 raise GuardViolation("established composition authorization is not AUTHORIZED")
             if auth.authorized_value is not composition.value:
@@ -217,6 +236,8 @@ def validate_observation(observation: NumericObservation, spec: MetricSpec) -> N
         raise GuardViolation(
             f"metric {spec.key} requires unit {spec.unit}, got {observation.unit}"
         )
+    if not isfinite(observation.value):
+        raise GuardViolation(f"metric {spec.key} value must be finite")
     if spec.minimum is not None and observation.value < spec.minimum:
         raise GuardViolation(f"metric {spec.key} is below allowed range")
     if spec.maximum is not None and observation.value > spec.maximum:
@@ -277,6 +298,19 @@ def evaluate_revisit(rule, state: CanonicalWorldState) -> RevisitResult:
     if condition is None:
         return RevisitResult.UNKNOWN
     return RevisitResult.TRIGGERED if condition else RevisitResult.NOT_TRIGGERED
+
+
+def evaluate_review(
+    *,
+    contract: ValidatedDecisionContract,
+    world_state: CanonicalWorldState,
+    target: SafeReuseTargetSpec,
+) -> Tuple[Tuple[str, RevisitResult], ...]:
+    raw = contract.contract
+    return tuple(
+        (rule_id, evaluate_revisit(raw.revisit_rule(rule_id), world_state))
+        for rule_id in target.revisit_rule_ids
+    )
 
 
 def rules_requiring_recheck(contract: DecisionContract, event: WorldEvent) -> Tuple[str, ...]:
@@ -383,27 +417,18 @@ def validate_target_against_contract(
         )
 
 
-def evaluate_safe_reuse(
+def _evaluate_safe_reuse_from_matches(
     *,
     contract: ValidatedDecisionContract,
-    match_results: Dict[str, MatchResult],
-    revisit_results: Dict[str, RevisitResult],
+    match_results: Mapping[str, MatchResult],
     target: SafeReuseTargetSpec,
 ) -> SafeReuseEvaluation:
-    if not isinstance(contract, ValidatedDecisionContract):
-        raise GuardViolation("evaluation requires ValidatedDecisionContract")
-    validate_target_against_contract(contract=contract, target=target)
     raw = contract.contract
 
     def require_match(rule_id: str) -> MatchResult:
         if rule_id not in match_results:
             raise GuardViolation(f"missing current-match result for target rule {rule_id}")
         return match_results[rule_id]
-
-    def require_revisit(rule_id: str) -> RevisitResult:
-        if rule_id not in revisit_results:
-            raise GuardViolation(f"missing revisit result for target rule {rule_id}")
-        return revisit_results[rule_id]
 
     all_bindings = (*target.changed_bindings, *target.surviving_bindings)
     bound_relations = tuple(
@@ -417,7 +442,7 @@ def evaluate_safe_reuse(
     if unestablished:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=unestablished,
+            limiting_requirements=unestablished,
             reason_codes=("TARGET_HISTORICAL_ROLE_NOT_ESTABLISHED",),
         )
 
@@ -427,65 +452,97 @@ def evaluate_safe_reuse(
     surviving_states = tuple(
         require_match(binding.current_match_rule_id) for binding in target.surviving_bindings
     )
-    revisit_states = tuple(require_revisit(rule_id) for rule_id in target.revisit_rule_ids)
 
     if any(state is MatchResult.UNKNOWN for state in (*changed_states, *surviving_states)):
         return SafeReuseEvaluation(
             result=SafeReuseResult.INSUFFICIENT_EVIDENCE,
-            limiting_relations=(),
+            limiting_requirements=(),
             reason_codes=("TARGET_CURRENT_MATCH_UNKNOWN",),
-        )
-    if any(state is RevisitResult.UNKNOWN for state in revisit_states):
-        return SafeReuseEvaluation(
-            result=SafeReuseResult.INSUFFICIENT_EVIDENCE,
-            limiting_relations=(),
-            reason_codes=("TARGET_REVISIT_STATE_UNKNOWN",),
         )
 
     if any(state is MatchResult.DOES_NOT_MATCH for state in surviving_states):
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=tuple(
+            limiting_requirements=tuple(
                 binding.historical_relation_id for binding in target.surviving_bindings
             ),
             reason_codes=("REQUIRED_SURVIVING_SUPPORT_DOES_NOT_MATCH",),
         )
 
-    relevant_change = (
-        any(state is MatchResult.DOES_NOT_MATCH for state in changed_states)
-        or any(state is RevisitResult.TRIGGERED for state in revisit_states)
+    relevant_support_change = any(
+        state is MatchResult.DOES_NOT_MATCH for state in changed_states
     )
-    if not relevant_change:
-        # Composition C1 only becomes necessary once the support structure relevant to
-        # this TargetSpec actually changes. We still require all bound historical roles
-        # and surviving current matches before this positive result.
+    if not relevant_support_change:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_AUTHORIZED,
-            limiting_relations=(),
-            reason_codes=("NO_TARGET_RELEVANT_CHANGE",),
+            limiting_requirements=(),
+            reason_codes=("NO_TARGET_SUPPORT_INVALIDATION",),
         )
 
     composition = raw.composition(target.limiting_composition_id)
     if composition.value is CompositionValue.ESTABLISHED_TRUE:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_AUTHORIZED,
-            limiting_relations=(),
+            limiting_requirements=(),
             reason_codes=("REQUIRED_COMPOSITION_ESTABLISHED_TRUE",),
         )
     if composition.value is CompositionValue.ESTABLISHED_FALSE:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=(composition.id,),
+            limiting_requirements=(composition.id,),
             reason_codes=("REQUIRED_COMPOSITION_ESTABLISHED_FALSE",),
         )
     if composition.value is CompositionValue.T0_UNRESOLVED:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
-            limiting_relations=(composition.id,),
+            limiting_requirements=(composition.id,),
             reason_codes=("REQUIRED_COMPOSITION_T0_UNRESOLVED",),
         )
     return SafeReuseEvaluation(
         result=SafeReuseResult.INSUFFICIENT_EVIDENCE,
-        limiting_relations=(composition.id,),
+        limiting_requirements=(composition.id,),
         reason_codes=("REQUIRED_COMPOSITION_NOT_DURABLY_KNOWN",),
+    )
+
+
+def evaluate_target(
+    *,
+    contract: ValidatedDecisionContract,
+    world_state: CanonicalWorldState,
+    target: SafeReuseTargetSpec,
+) -> TargetEvaluation:
+    if not isinstance(contract, ValidatedDecisionContract):
+        raise GuardViolation("evaluation requires ValidatedDecisionContract")
+    validate_target_against_contract(contract=contract, target=target)
+    raw = contract.contract
+    current_matches = tuple(
+        (
+            binding.current_match_rule_id,
+            evaluate_current_match(raw.match_rule(binding.current_match_rule_id), world_state),
+        )
+        for binding in (*target.changed_bindings, *target.surviving_bindings)
+    )
+    if len({rule_id for rule_id, _ in current_matches}) != len(current_matches):
+        raise GuardViolation("TargetSpec evaluates the same current-match rule more than once")
+    match_map = dict(current_matches)
+    safe_reuse = _evaluate_safe_reuse_from_matches(
+        contract=contract,
+        match_results=match_map,
+        target=target,
+    )
+    review_states = evaluate_review(
+        contract=contract,
+        world_state=world_state,
+        target=target,
+    )
+    return TargetEvaluation(
+        safe_reuse=safe_reuse,
+        current_matches=current_matches,
+        review_states=review_states,
+    )
+
+
+def evaluate_safe_reuse(*args, **kwargs):
+    raise GuardViolation(
+        "evaluate_safe_reuse() no longer accepts caller-supplied epistemic results; use evaluate_target()"
     )
