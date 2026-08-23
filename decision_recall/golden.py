@@ -88,5 +88,8 @@ def safe_reuse_target_v1() -> SafeReuseTargetSpec:
     return SafeReuseTargetSpec(
         id="SAFE_REUSE_RECORDED_RATIONALE",
         version="1",
+        changed_match_rule_ids=("M1",),
+        surviving_match_rule_ids=("M2",),
+        revisit_rule_ids=("RC1",),
         limiting_composition_id="C1",
     )
