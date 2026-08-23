@@ -161,6 +161,9 @@ class RevisitRule:
 class SafeReuseTargetSpec:
     id: str
     version: str
+    changed_match_rule_ids: Tuple[str, ...]
+    surviving_match_rule_ids: Tuple[str, ...]
+    revisit_rule_ids: Tuple[str, ...]
     limiting_composition_id: str
 
 
