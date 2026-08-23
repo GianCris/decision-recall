@@ -111,31 +111,49 @@ def evaluate_safe_reuse(
     revisit_results: Dict[str, RevisitResult],
     target: SafeReuseTargetSpec,
 ) -> SafeReuseEvaluation:
-    if any(value is MatchResult.UNKNOWN for value in match_results.values()):
+    def require_match(rule_id: str) -> MatchResult:
+        if rule_id not in match_results:
+            raise GuardViolation(f"missing current-match result for target rule {rule_id}")
+        return match_results[rule_id]
+
+    def require_revisit(rule_id: str) -> RevisitResult:
+        if rule_id not in revisit_results:
+            raise GuardViolation(f"missing revisit result for target rule {rule_id}")
+        return revisit_results[rule_id]
+
+    changed_states = tuple(require_match(rule_id) for rule_id in target.changed_match_rule_ids)
+    surviving_states = tuple(require_match(rule_id) for rule_id in target.surviving_match_rule_ids)
+    revisit_states = tuple(require_revisit(rule_id) for rule_id in target.revisit_rule_ids)
+
+    if any(state is MatchResult.UNKNOWN for state in (*changed_states, *surviving_states)):
         return SafeReuseEvaluation(
             result=SafeReuseResult.INSUFFICIENT_EVIDENCE,
             limiting_relations=(),
-            reason_codes=("CURRENT_MATCH_UNKNOWN",),
+            reason_codes=("TARGET_CURRENT_MATCH_UNKNOWN",),
         )
-    if any(value is RevisitResult.UNKNOWN for value in revisit_results.values()):
+    if any(state is RevisitResult.UNKNOWN for state in revisit_states):
         return SafeReuseEvaluation(
             result=SafeReuseResult.INSUFFICIENT_EVIDENCE,
             limiting_relations=(),
-            reason_codes=("REVISIT_STATE_UNKNOWN",),
+            reason_codes=("TARGET_REVISIT_STATE_UNKNOWN",),
         )
 
-    dropped = [
-        rule.historical_relation_id
-        for rule in contract.current_match_rules
-        if match_results.get(rule.id) is MatchResult.DOES_NOT_MATCH
-    ]
-    if not dropped and not any(
-        value is RevisitResult.TRIGGERED for value in revisit_results.values()
-    ):
+    relevant_change = (
+        any(state is MatchResult.DOES_NOT_MATCH for state in changed_states)
+        or any(state is RevisitResult.TRIGGERED for state in revisit_states)
+    )
+    if not relevant_change:
         return SafeReuseEvaluation(
             result=SafeReuseResult.REUSE_AUTHORIZED,
             limiting_relations=(),
-            reason_codes=("NO_RELEVANT_CHANGE",),
+            reason_codes=("NO_TARGET_RELEVANT_CHANGE",),
+        )
+
+    if any(state is MatchResult.DOES_NOT_MATCH for state in surviving_states):
+        return SafeReuseEvaluation(
+            result=SafeReuseResult.REUSE_NOT_AUTHORIZED,
+            limiting_relations=tuple(target.surviving_match_rule_ids),
+            reason_codes=("REQUIRED_SURVIVING_SUPPORT_DOES_NOT_MATCH",),
         )
 
     composition = contract.composition(target.limiting_composition_id)
