@@ -2,7 +2,10 @@ import inspect
 import unittest
 
 from decision_recall.product.declaration import declaration_to_evidence
-from decision_recall.product.gemini_compiler import GeminiCompilerError
+from decision_recall.product.gemini_compiler import (
+    GeminiCompilerAuthenticationError,
+    GeminiCompilerError,
+)
 from decision_recall.product.gemini_probe import (
     RecordingTransport,
     _expected_signatures,
@@ -30,6 +33,12 @@ class _ScriptedDelegate:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+
+class _StatusError(RuntimeError):
+    def __init__(self, code: int, message: str = "status failure") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
@@ -89,15 +98,9 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
 
     def test_429_retries_then_records_single_semantic_response(self):
         payload = {"candidates": []}
-        delegate = _ScriptedDelegate(
-            [GeminiCompilerError("429 RESOURCE_EXHAUSTED"), payload]
-        )
+        delegate = _ScriptedDelegate([GeminiCompilerError("429 RESOURCE_EXHAUSTED"), payload])
         sleeps = []
-        transport = RecordingTransport(
-            delegate,
-            sleep_fn=sleeps.append,
-            jitter_seconds=0,
-        )
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
 
         result = transport.generate_json(
             system_instruction="system",
@@ -112,16 +115,27 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(len(transport.records[0]["infra_errors_seen"]), 1)
         self.assertEqual(sleeps, [2.0])
 
+    def test_structured_429_cause_retries_without_text_signature(self):
+        payload = {"candidates": []}
+        wrapped = GeminiCompilerError("Gemini request failed")
+        wrapped.__cause__ = _StatusError(429, "capacity")
+        delegate = _ScriptedDelegate([wrapped, payload])
+        transport = RecordingTransport(delegate, sleep_fn=lambda _seconds: None, jitter_seconds=0)
+
+        result = transport.generate_json(
+            system_instruction="system",
+            prompt="prompt",
+            response_schema={"type": "object"},
+        )
+
+        self.assertEqual(result, payload)
+        self.assertEqual(delegate.calls, 2)
+        self.assertEqual(transport.records[0]["infra_attempt_count"], 2)
+
     def test_raw_503_retries_then_records_single_semantic_response(self):
         payload = {"candidates": []}
-        delegate = _ScriptedDelegate(
-            [RuntimeError("503 SERVICE_UNAVAILABLE"), payload]
-        )
-        transport = RecordingTransport(
-            delegate,
-            sleep_fn=lambda _seconds: None,
-            jitter_seconds=0,
-        )
+        delegate = _ScriptedDelegate([RuntimeError("503 SERVICE_UNAVAILABLE"), payload])
+        transport = RecordingTransport(delegate, sleep_fn=lambda _seconds: None, jitter_seconds=0)
 
         result = transport.generate_json(
             system_instruction="system",
@@ -133,6 +147,74 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(delegate.calls, 2)
         self.assertEqual(transport.records[0]["infra_attempt_count"], 2)
         self.assertEqual(transport.records[0]["infra_errors_seen"][0]["error_type"], "RuntimeError")
+
+    def test_adc_unavailable_auth_error_is_never_retried(self):
+        error = GeminiCompilerAuthenticationError(
+            "Application Default Credentials are unavailable or invalid for Gemini on Google Cloud."
+        )
+        delegate = _ScriptedDelegate([error])
+        sleeps = []
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
+
+        with self.assertRaises(GeminiCompilerAuthenticationError):
+            transport.generate_json(
+                system_instruction="system",
+                prompt="prompt",
+                response_schema={"type": "object"},
+            )
+
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(transport.records, [])
+
+    def test_401_auth_error_is_never_retried(self):
+        error = GeminiCompilerAuthenticationError("401 UNAUTHENTICATED")
+        delegate = _ScriptedDelegate([error])
+        sleeps = []
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
+
+        with self.assertRaises(GeminiCompilerAuthenticationError):
+            transport.generate_json(
+                system_instruction="system",
+                prompt="prompt",
+                response_schema={"type": "object"},
+            )
+
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(sleeps, [])
+
+    def test_403_auth_error_is_never_retried(self):
+        error = GeminiCompilerAuthenticationError("403 PERMISSION_DENIED")
+        delegate = _ScriptedDelegate([error])
+        sleeps = []
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
+
+        with self.assertRaises(GeminiCompilerAuthenticationError):
+            transport.generate_json(
+                system_instruction="system",
+                prompt="prompt",
+                response_schema={"type": "object"},
+            )
+
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(sleeps, [])
+
+    def test_auth_wrapper_wins_over_retryable_status_in_cause(self):
+        error = GeminiCompilerAuthenticationError("credentials unavailable")
+        error.__cause__ = _StatusError(503, "service unavailable")
+        delegate = _ScriptedDelegate([error])
+        sleeps = []
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
+
+        with self.assertRaises(GeminiCompilerAuthenticationError):
+            transport.generate_json(
+                system_instruction="system",
+                prompt="prompt",
+                response_schema={"type": "object"},
+            )
+
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(sleeps, [])
 
     def test_semantic_wrong_answer_is_not_retried(self):
         wrong_payload = {
@@ -146,11 +228,7 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
             ]
         }
         delegate = _ScriptedDelegate([wrong_payload])
-        transport = RecordingTransport(
-            delegate,
-            sleep_fn=lambda _seconds: None,
-            jitter_seconds=0,
-        )
+        transport = RecordingTransport(delegate, sleep_fn=lambda _seconds: None, jitter_seconds=0)
 
         transport.generate_json(
             system_instruction="system",
@@ -167,11 +245,7 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
     def test_non_infra_compiler_error_is_never_retried(self):
         delegate = _ScriptedDelegate([GeminiCompilerError("Gemini candidate quote is not an exact span")])
         sleeps = []
-        transport = RecordingTransport(
-            delegate,
-            sleep_fn=sleeps.append,
-            jitter_seconds=0,
-        )
+        transport = RecordingTransport(delegate, sleep_fn=sleeps.append, jitter_seconds=0)
 
         with self.assertRaisesRegex(GeminiCompilerError, "not an exact span"):
             transport.generate_json(
@@ -184,10 +258,42 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(sleeps, [])
         self.assertEqual(transport.records, [])
 
-    def test_exhausted_infra_retries_return_partial_failed_artifact(self):
-        delegate = _ScriptedDelegate(
-            [GeminiCompilerError("429 RESOURCE_EXHAUSTED") for _ in range(4)]
+    def test_model_response_rejected_by_compiler_is_preserved_as_semantic_fail_artifact(self):
+        wrong_quote_payload = {
+            "candidates": [
+                {
+                    "semantic_key": "apex_delivery_instability",
+                    "kind": "fact",
+                    "source_id": "decision-note",
+                    "quote": "This quote does not exist in the decision note.",
+                }
+            ]
+        }
+        delegate = _ScriptedDelegate([wrong_quote_payload])
+        transport = RecordingTransport(delegate, sleep_fn=lambda _seconds: None, jitter_seconds=0)
+
+        artifact = run_probe(
+            repetitions=1,
+            transport=transport,
+            semantic_pause_seconds=0,
+            semantic_pause_jitter_seconds=0,
+            sleep_fn=lambda _seconds: None,
+            jitter_fn=lambda _low, _high: 0.0,
         )
+
+        self.assertFalse(artifact["passed"])
+        self.assertEqual(artifact["completed_semantic_executions"], 1)
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(len(artifact["attempts"]), 1)
+        attempt = artifact["attempts"][0]
+        self.assertEqual(attempt["failure_type"], "compiler_boundary_rejection")
+        self.assertTrue(attempt["final_model_response_received"])
+        self.assertFalse(attempt["semantic_pass"])
+        self.assertIn("exact span", attempt["failure_error"])
+        self.assertEqual(attempt["request"]["raw_structured_output"], wrong_quote_payload)
+
+    def test_exhausted_infra_retries_return_partial_failed_artifact(self):
+        delegate = _ScriptedDelegate([GeminiCompilerError("429 RESOURCE_EXHAUSTED") for _ in range(4)])
         transport = RecordingTransport(
             delegate,
             max_infra_attempts=4,
