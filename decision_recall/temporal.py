@@ -135,6 +135,14 @@ class AuthorizationRecord:
     evidence_ids: Tuple[str, ...]
     policy_version: str
     policy_hash: str
+    # Optional M2.1 temporal semantic binding. Legacy M2 callers may leave these
+    # blank; the strict replay path requires exact values and validates them.
+    contract_artifact_id: str = ""
+    entity_definition_hash: str = ""
+    scope: str = ""
+    scope_ref: str = ""
+    target_id: Optional[str] = None
+    target_version: Optional[str] = None
 
     def validate(self) -> None:
         if not self.id.strip() or not self.entity_id.strip():
@@ -154,6 +162,10 @@ class DecisionCommitRecord:
     contract_version: str
     capture_profile_version: str
     capture_profile_hash: str
+    # Exact contract identity is committed in the temporal ledger for M2.1.
+    contract_artifact_id: str = ""
+    contract_hash: str = ""
+    canonicalization_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -170,6 +182,16 @@ class EvaluationSnapshot:
     engine_version: str
     engine_hash: str
     result_fingerprint: str
+    # Strong M2.1 output identity. The basic M2 API keeps these optional, while
+    # strict verification requires them to match the StrongEvaluationSnapshot.
+    decision_commit_id: str = ""
+    contract_hash: str = ""
+    world_time: Optional[datetime] = None
+    target_artifact_id: str = ""
+    world_schema_artifact_id: str = ""
+    world_schema_hash: str = ""
+    canonical_result_json: str = ""
+    canonicalization_version: str = ""
 
 
 @dataclass(frozen=True)
