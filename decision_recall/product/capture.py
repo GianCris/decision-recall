@@ -51,11 +51,7 @@ class DecisionRelationBinding:
 
 @dataclass(frozen=True)
 class DecisionStructure:
-    """Typed t0 decision structure available independently of future events.
-
-    `relations` contains already-existing structural relations only. A capture slot
-    does not need to exist here; ProfileBinder may deterministically originate it.
-    """
+    """Typed t0 structure. Prospective capture slots need not pre-exist here."""
 
     decision_id: str
     decision_display: str
@@ -75,8 +71,6 @@ class CaptureInstantiationContext:
 
 @dataclass(frozen=True)
 class CaptureSlotSpec:
-    """Concrete t0 slot produced from a reusable template plus structural bindings."""
-
     semantic_role: str
     slot: RelationSlot
     requires_subject_fact: bool
@@ -180,8 +174,6 @@ def instantiate_capture_profile(
     decision_structure_hash: str = "LEGACY_DIRECT_CONTEXT",
     binder_version: str = "LEGACY_DIRECT_CONTEXT",
 ) -> CaptureProfile:
-    """Low-level deterministic instantiation; product code should prefer ProfileBinder."""
-
     matches = tuple(
         item for item in template.slots
         if item.subject_semantic_role == context.subject_semantic_role
@@ -228,12 +220,6 @@ def _deterministic_relation_slot_id(
     slot_template: CaptureSlotTemplate,
     subject: DecisionFactBinding,
 ) -> str:
-    """Allocate stable slot identity from t0 structure, never a prewritten target relation.
-
-    V1 preserves compact R<n> ids when the existing structural relation namespace is
-    numeric (e.g. R1 -> generated R2). Otherwise it falls back to a semantic hash id.
-    """
-
     existing = {item.entity_id for item in structure.relations}
     numeric = []
     for entity_id in existing:
@@ -263,7 +249,7 @@ def _deterministic_relation_slot_id(
 
 
 class ProfileBinder:
-    """Bind reusable capture policy to typed t0 structure without prewritten target slots."""
+    """Bind capture policy without requiring the target relation slot to pre-exist."""
 
     version = BINDER_V1
 
@@ -286,22 +272,33 @@ class ProfileBinder:
                 raise ValueError("profile binder requires exactly one structural fact for semantic role")
             fact = facts[0]
 
-            existing_matches = tuple(
+            # A matching historical relation may be present in a legacy/schema-rich
+            # structure, but it is deliberately removed from slot-origin input. This
+            # makes slot creation identical when that target relation is absent.
+            matching = tuple(
                 relation for relation in structure.relations
                 if relation.relation_type is slot_template.relation_type
                 and relation.subject_id == fact.entity_id
                 and relation.object_id == structure.decision_id
             )
-            if len(existing_matches) > 1:
-                raise ValueError("profile binder found ambiguous existing structural relation")
-            if existing_matches:
-                relation_id = existing_matches[0].entity_id
-            else:
-                relation_id = _deterministic_relation_slot_id(
-                    structure=structure,
-                    slot_template=slot_template,
-                    subject=fact,
-                )
+            if len(matching) > 1:
+                raise ValueError("profile binder found ambiguous pre-existing target relations")
+            origin_relations = tuple(item for item in structure.relations if item not in matching)
+            origin_structure = DecisionStructure(
+                decision_id=structure.decision_id,
+                decision_display=structure.decision_display,
+                facts=structure.facts,
+                relations=origin_relations,
+            )
+
+            relation_id = _deterministic_relation_slot_id(
+                structure=origin_structure,
+                slot_template=slot_template,
+                subject=fact,
+            )
+            # In a numeric legacy namespace, a pre-existing target relation must not
+            # be able to steer the generated identity. If present, it may coincide
+            # with the deterministic result, but it is not an input to generation.
             if relation_id in allocated_ids:
                 raise ValueError("profile binder generated duplicate capture slot id")
             allocated_ids.add(relation_id)
@@ -391,8 +388,6 @@ def select_critical_gaps(
     established_relation_ids: FrozenSet[str],
     selected_at: datetime,
 ) -> Tuple[CriticalGap, ...]:
-    """Select relation gaps from t0-only structured inputs; no future-world input exists."""
-
     _verify_assigned_profile(profile, assignment)
     if profile.question_budget == 0:
         return ()
@@ -435,8 +430,6 @@ def plan_questions(
     eligible_relation_gaps: Tuple[CriticalGap, ...] = (),
     eligible_composition_ids: Tuple[str, ...] = (),
 ) -> Tuple[str, ...]:
-    """Plan only within remaining frozen interaction budget."""
-
     if session.remaining_budget <= 0:
         return ()
     ordered = tuple(gap.slot_id for gap in eligible_relation_gaps) + eligible_composition_ids
@@ -467,6 +460,4 @@ def composition_question_eligible(
     composition: CompositionState,
     established_relation_ids: FrozenSet[str],
 ) -> bool:
-    """A sufficiency question is well-formed only after all referenced roles exist."""
-
     return bool(composition.relation_ids) and set(composition.relation_ids).issubset(established_relation_ids)
