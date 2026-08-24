@@ -15,6 +15,7 @@ from .compiler import CandidateKind, SemanticCandidateResolver, SourceDocument
 from .declaration import CaptureAnswer
 from .gemini_compiler import (
     GeminiCandidateCompiler,
+    GeminiCompilerAuthenticationError,
     GeminiCompilerError,
     GeminiVertexTransport,
     SUPPLIER_RESILIENCE_COMPILER_PROFILE,
@@ -37,15 +38,47 @@ def _text_hash(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
 
 
+def _exception_chain(exc: BaseException):
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _numeric_status(exc: BaseException) -> int | None:
+    for attr in ("code", "status_code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
 def _is_retryable_infra_error(exc: BaseException) -> bool:
-    text = str(exc).upper()
-    return (
-        "429" in text
-        or "RESOURCE_EXHAUSTED" in text
-        or "503" in text
-        or "SERVICE_UNAVAILABLE" in text
-        or "UNAVAILABLE" in text
-    )
+    chain = tuple(_exception_chain(exc))
+
+    # Authentication/configuration failures are never capacity retries, even if
+    # their human-readable message contains words such as "unavailable".
+    if any(isinstance(item, GeminiCompilerAuthenticationError) for item in chain):
+        return False
+
+    for item in chain:
+        if _numeric_status(item) in {429, 503}:
+            return True
+
+    # Last-resort compatibility fallback for wrappers that discard structured
+    # status codes. Keep the signatures deliberately specific; generic
+    # "UNAVAILABLE" would misclassify ADC/authentication failures.
+    for item in chain:
+        text = str(item).upper()
+        if "429 RESOURCE_EXHAUSTED" in text:
+            return True
+        if "503 SERVICE_UNAVAILABLE" in text or "503 UNAVAILABLE" in text:
+            return True
+    return False
 
 
 class InfraRetriesExhausted(GeminiCompilerError):
@@ -98,10 +131,6 @@ class RecordingTransport:
                     response_schema=response_schema,
                 )
             except Exception as exc:
-                # Some Gen AI SDK 503s surface as server exceptions before the
-                # production transport wraps them. The live harness handles only
-                # explicitly recognizable transient infrastructure failures here;
-                # every other exception is re-raised unchanged.
                 if not _is_retryable_infra_error(exc):
                     raise
                 infra_errors.append(
@@ -249,6 +278,33 @@ def _infra_failure_attempt(*, scenario: str, iteration: int, exc: InfraRetriesEx
     }
 
 
+def _semantic_boundary_failure_attempt(
+    *,
+    scenario: str,
+    iteration: int,
+    before_record_count: int,
+    transport: RecordingTransport,
+    exc: GeminiCompilerError,
+) -> dict[str, object] | None:
+    # Only convert to a semantic FAIL when the model actually returned a payload
+    # for this execution. Pre-response auth/config/programming errors still
+    # propagate normally and are never mislabeled as semantic model failures.
+    if len(transport.records) != before_record_count + 1:
+        return None
+    record = transport.records[-1]
+    return {
+        **_attempt_metadata(scenario=scenario, iteration=iteration, record=record),
+        "passed": False,
+        "semantic_pass": False,
+        "failure_type": "compiler_boundary_rejection",
+        "failure_error_type": type(exc).__name__,
+        "failure_error": str(exc),
+        "request": record,
+        "normalized_candidates": _raw_normalized(record),
+        "candidate_signatures_match": False,
+    }
+
+
 def _build_artifact(
     *,
     started_at: str,
@@ -259,7 +315,7 @@ def _build_artifact(
     failures = [item for item in attempts if not item["passed"]]
     semantic_responses = [item for item in attempts if item.get("final_model_response_received")]
     return {
-        "probe_version": "PC2_LIVE_GEMINI_V3_INFRA_RESILIENT",
+        "probe_version": "PC2_LIVE_GEMINI_V4_STRICT_INFRA_CLASSIFICATION",
         "started_at": started_at,
         "model": transport.delegate.model_id,
         "project": transport.delegate.project_id,
@@ -286,6 +342,7 @@ def _build_artifact(
             "backoff_seconds": list(transport.backoff_seconds),
             "jitter_seconds_max": transport.jitter_seconds,
             "semantic_failures_are_retried": False,
+            "authentication_failures_are_retried": False,
         },
         "attempts": attempts,
         "passed": len(attempts) == repetitions * 3 and not failures,
@@ -342,6 +399,18 @@ def run_probe(
         except InfraRetriesExhausted as exc:
             attempts.append(_infra_failure_attempt(scenario="normal", iteration=iteration, exc=exc))
             return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
+        except GeminiCompilerError as exc:
+            failure = _semantic_boundary_failure_attempt(
+                scenario="normal",
+                iteration=iteration,
+                before_record_count=before,
+                transport=transport,
+                exc=exc,
+            )
+            if failure is None:
+                raise
+            attempts.append(failure)
+            return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
         if len(transport.records) != before + 1:
             raise RuntimeError("normal probe must record exactly one model response; human authority must not call Gemini")
         record = transport.records[-1]
@@ -381,6 +450,18 @@ def run_probe(
             bundle = compiler.compile_observable(observable=paraphrase, profile=base.profile)
         except InfraRetriesExhausted as exc:
             attempts.append(_infra_failure_attempt(scenario="paraphrase", iteration=iteration, exc=exc))
+            return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
+        except GeminiCompilerError as exc:
+            failure = _semantic_boundary_failure_attempt(
+                scenario="paraphrase",
+                iteration=iteration,
+                before_record_count=before,
+                transport=transport,
+                exc=exc,
+            )
+            if failure is None:
+                raise
+            attempts.append(failure)
             return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
         if len(transport.records) != before + 1:
             raise RuntimeError("paraphrase probe must record exactly one model response")
@@ -423,6 +504,18 @@ def run_probe(
             bundle = compiler.compile_observable(observable=injected, profile=base.profile)
         except InfraRetriesExhausted as exc:
             attempts.append(_infra_failure_attempt(scenario="document_prompt_injection", iteration=iteration, exc=exc))
+            return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
+        except GeminiCompilerError as exc:
+            failure = _semantic_boundary_failure_attempt(
+                scenario="document_prompt_injection",
+                iteration=iteration,
+                before_record_count=before,
+                transport=transport,
+                exc=exc,
+            )
+            if failure is None:
+                raise
+            attempts.append(failure)
             return _build_artifact(started_at=started_at, repetitions=repetitions, attempts=attempts, transport=transport)
         if len(transport.records) != before + 1:
             raise RuntimeError("injection probe must record exactly one model response")
