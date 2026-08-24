@@ -162,7 +162,7 @@ def supplier_resilience_capture_template() -> CaptureProfileTemplate:
                 requires_subject_fact=True,
                 ephemeral_if_unresolved=True,
                 priority=100,
-                question_pattern="Did {subject_display} materially influence {decision_display}?",
+                question_pattern="Did the fact that {subject_display} materially influence {decision_display}?",
             ),
         ),
     )
