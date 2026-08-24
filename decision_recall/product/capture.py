@@ -15,7 +15,7 @@ class CaptureSlotTemplate:
 
     semantic_role: str
     relation_type: RelationType
-    subject_predicate_key: str
+    subject_semantic_role: str
     requires_subject_fact: bool
     ephemeral_if_unresolved: bool
     priority: int
@@ -35,7 +35,7 @@ class CaptureInstantiationContext:
     decision_id: str
     relation_id: str
     subject_id: str
-    subject_predicate_key: str
+    subject_semantic_role: str
     subject_display: str
     decision_display: str = "this decision"
 
@@ -89,7 +89,7 @@ def supplier_resilience_capture_template() -> CaptureProfileTemplate:
             CaptureSlotTemplate(
                 semantic_role="REACTION_CAPACITY_HISTORICAL_ROLE",
                 relation_type=RelationType.HISTORICAL_SUPPORT,
-                subject_predicate_key="beacon_reactivation_delay",
+                subject_semantic_role="SUPPLIER_REACTIVATION_DELAY",
                 requires_subject_fact=True,
                 ephemeral_if_unresolved=True,
                 priority=100,
@@ -106,7 +106,7 @@ def instantiate_capture_profile(
 ) -> CaptureProfile:
     matches = tuple(
         item for item in template.slots
-        if item.subject_predicate_key == context.subject_predicate_key
+        if item.subject_semantic_role == context.subject_semantic_role
     )
     if len(matches) != 1:
         raise ValueError("capture template must match exactly one subject semantic role")
