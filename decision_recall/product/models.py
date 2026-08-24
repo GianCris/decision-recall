@@ -10,6 +10,8 @@ class CaptureProfileView:
     artifact_id: str
     version: str
     content_hash: str
+    template_id: str
+    template_version: str
     assigned_at: datetime
     question_budget: int
     slot_ids: Tuple[str, ...]
