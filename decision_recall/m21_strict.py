@@ -6,11 +6,9 @@ from typing import Mapping, Optional, Tuple
 from .domain import (
     AuthorizationStatus,
     CompositionAuthorizationDecision,
-    CompositionState,
     CompositionValue,
     DecisionContract,
     HistoricalKnowledgeState,
-    HistoricalRelation,
     SafeReuseTargetSpec,
 )
 from .engine import evaluate_target, validate_contract
@@ -87,81 +85,49 @@ def validate_commit_identity_in_ledger(*, ledger, commit: StrongDecisionCommit) 
         raise TemporalIntegrityError("strong commit does not match temporally committed identity")
 
 
-def _validate_scoped_record_binding(
-    *,
-    scoped,
-    record: AuthorizationRecord,
-    ledger_batch_seq: int,
-    commit: StrongDecisionCommit,
-) -> None:
-    target_id = scoped.target_ref.id if scoped.target_ref else None
-    target_version = scoped.target_ref.version if scoped.target_ref else None
-    if (
-        record.contract_artifact_id != scoped.contract_artifact_id
-        or record.entity_definition_hash != scoped.entity_definition_hash
-        or record.scope != scoped.scope.value
-        or record.scope_ref != scoped.scope_ref
-        or record.target_id != target_id
-        or record.target_version != target_version
-    ):
-        raise TemporalIntegrityError("scoped authorization metadata was not temporally committed")
-    if scoped.scope is AuthorizationScope.COMMIT_TIME:
-        if scoped.scope_ref != commit.commit_id:
-            raise TemporalIntegrityError("COMMIT_TIME authority references the wrong commit")
-        # V1 freezes semantic binding in the same atomic batch that commits D-104.
-        if ledger_batch_seq != commit.commit_cutoff_seq:
-            raise TemporalIntegrityError("COMMIT_TIME semantic binding was not recorded in commit batch")
-
-
-def _validated_scoped_commit_authorizations(
+def _validated_commit_authorizations(
     *,
     registry: M21Registry,
     ledger,
     commit: StrongDecisionCommit,
     policies: AuthorityPolicies,
-) -> Tuple[tuple, ...]:
+) -> Tuple[AuthorizationRecord, ...]:
+    """Reconstruct commit-time authority from the temporal ledger itself.
+
+    M21Registry authorizations are deliberately not consulted here. A registry row
+    added later therefore cannot promote old AuthorizationRecord metadata into t0.
+    """
     validate_commit_identity_in_ledger(ledger=ledger, commit=commit)
     artifact = registry.artifacts.get(commit.contract_artifact_id)
     if artifact is None or artifact.content_hash != commit.contract_hash:
         raise TemporalIntegrityError("commit contract artifact missing or mismatched")
     contract = contract_from_artifact(artifact)
     active = _active_entry_map(ledger, commit.commit_cutoff_seq)
-    validated = []
+    validated: list[AuthorizationRecord] = []
 
-    for scoped in registry.authorizations.values():
-        if scoped.scope is not AuthorizationScope.COMMIT_TIME or scoped.scope_ref != commit.commit_id:
+    for ledger_entry in active.values():
+        if ledger_entry.kind is not LedgerEntryKind.AUTHORIZATION:
             continue
-        if scoped.contract_artifact_id != commit.contract_artifact_id:
-            raise TemporalIntegrityError("COMMIT_TIME authorization references another contract")
-        if entity_definition_hash(contract, scoped.entity_id) != scoped.entity_definition_hash:
-            raise TemporalIntegrityError("authorization semantic identity no longer matches entity")
-
-        ledger_entry = active.get(scoped.authorization_id)
-        if ledger_entry is None or ledger_entry.kind is not LedgerEntryKind.AUTHORIZATION:
-            raise TemporalIntegrityError("scoped authorization is not visible at commit cutoff")
         record = ledger_entry.payload
         if not isinstance(record, AuthorizationRecord):
-            raise TemporalIntegrityError("authorization ledger payload type mismatch")
+            continue
+        if record.scope != AuthorizationScope.COMMIT_TIME.value or record.scope_ref != commit.commit_id:
+            continue
         record.validate()
+        if ledger_entry.batch_seq != commit.commit_cutoff_seq:
+            raise TemporalIntegrityError("COMMIT_TIME semantic binding was not recorded in commit batch")
+        if record.contract_artifact_id != commit.contract_artifact_id:
+            raise TemporalIntegrityError("COMMIT_TIME authorization references another contract")
+        if not record.entity_definition_hash:
+            raise TemporalIntegrityError("COMMIT_TIME authorization lacks semantic definition hash")
+        if entity_definition_hash(contract, record.entity_id) != record.entity_definition_hash:
+            raise TemporalIntegrityError("authorization semantic identity no longer matches entity")
+        if record.target_id is not None or record.target_version is not None:
+            raise TemporalIntegrityError("COMMIT_TIME authorization must not be target-scoped")
         if len(record.evidence_ids) != 1:
             raise TemporalIntegrityError("M2.1 V1 requires exactly one evidence record per authorization")
-        if record.evidence_ids != (scoped.evidence_id,):
-            raise TemporalIntegrityError("scoped authorization evidence differs from ledger authorization")
-        if (
-            record.entity_id != scoped.entity_id
-            or record.authorized_assertion is not scoped.authorized_assertion
-            or record.policy_version != scoped.policy_version
-            or record.policy_hash != scoped.policy_hash
-        ):
-            raise TemporalIntegrityError("scoped authorization differs from ledger authorization")
-        _validate_scoped_record_binding(
-            scoped=scoped,
-            record=record,
-            ledger_batch_seq=ledger_entry.batch_seq,
-            commit=commit,
-        )
 
-        evidence_entry = active.get(scoped.evidence_id)
+        evidence_entry = active.get(record.evidence_ids[0])
         if evidence_entry is None or evidence_entry.kind is not LedgerEntryKind.EVIDENCE:
             raise TemporalIntegrityError("authorization evidence is not active at commit cutoff")
         evidence = evidence_entry.payload
@@ -172,7 +138,7 @@ def _validated_scoped_commit_authorizations(
             (
                 item
                 for item in evidence.candidate_assertions
-                if item.entity_id == scoped.entity_id and item.assertion is scoped.authorized_assertion
+                if item.entity_id == record.entity_id and item.assertion is record.authorized_assertion
             ),
             None,
         )
@@ -194,9 +160,9 @@ def _validated_scoped_commit_authorizations(
             or replayed.policy_hash != record.policy_hash
         ):
             raise TemporalIntegrityError("persisted authorization does not reproduce under historical policy")
-        validated.append((scoped, record))
+        validated.append(record)
 
-    return tuple(sorted(validated, key=lambda item: item[0].authorization_id))
+    return tuple(sorted(validated, key=lambda item: item.id))
 
 
 def _reject_conflicting_authority(entity_id: str, assertions: set[AuthorizedAssertion]) -> None:
@@ -259,26 +225,21 @@ def strict_materialize_committed_contract(
         authority_policy=authority_policy,
         authority_policies=authority_policies,
     )
-    validated = _validated_scoped_commit_authorizations(
+    validated = _validated_commit_authorizations(
         registry=registry,
         ledger=ledger,
         commit=commit,
         policies=policies,
     )
-    by_entity: dict[str, list[tuple]] = {}
-    for scoped, record in validated:
-        by_entity.setdefault(scoped.entity_id, []).append((scoped, record))
+    by_entity: dict[str, list[AuthorizationRecord]] = {}
+    for record in validated:
+        by_entity.setdefault(record.entity_id, []).append(record)
 
     for entity_id, items in by_entity.items():
-        _reject_conflicting_authority(
-            entity_id,
-            {item[0].authorized_assertion for item in items},
-        )
+        _reject_conflicting_authority(entity_id, {item.authorized_assertion for item in items})
 
-    # A committed ContractArtifact defines slots/rules, but the Target may consume
-    # them only when their semantic role was positively authorized at commit time.
     for entity_id, expected in _required_target_authority(original, target).items():
-        assertions = {item[0].authorized_assertion for item in by_entity.get(entity_id, [])}
+        assertions = {item.authorized_assertion for item in by_entity.get(entity_id, [])}
         if expected not in assertions:
             raise TemporalIntegrityError(
                 f"MISSING_COMMIT_TIME_SEMANTIC_AUTHORITY:{entity_id}:{expected.value}"
@@ -287,30 +248,27 @@ def strict_materialize_committed_contract(
     relations = []
     for relation in original.historical_relations:
         items = by_entity.get(relation.id, [])
-        assertions = {item[0].authorized_assertion for item in items}
+        assertions = {item.authorized_assertion for item in items}
         if AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE in assertions:
-            scoped, record = next(
-                item
-                for item in items
-                if item[0].authorized_assertion is AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
+            record = next(
+                item for item in items
+                if item.authorized_assertion is AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
             )
             relations.append(
                 replace(
                     relation,
                     knowledge_state=HistoricalKnowledgeState.ESTABLISHED,
-                    evidence_refs=(scoped.evidence_id,),
+                    evidence_refs=record.evidence_ids,
                     authorization_policy_version=record.policy_version,
                 )
             )
         elif AuthorizedAssertion.T0_UNRESOLVED in assertions:
-            scoped, record = next(
-                item for item in items if item[0].authorized_assertion is AuthorizedAssertion.T0_UNRESOLVED
-            )
+            record = next(item for item in items if item.authorized_assertion is AuthorizedAssertion.T0_UNRESOLVED)
             relations.append(
                 replace(
                     relation,
                     knowledge_state=HistoricalKnowledgeState.T0_UNRESOLVED,
-                    evidence_refs=(scoped.evidence_id,),
+                    evidence_refs=record.evidence_ids,
                     authorization_policy_version=record.policy_version,
                 )
             )
@@ -327,40 +285,34 @@ def strict_materialize_committed_contract(
     compositions = []
     for composition in original.composition_states:
         items = by_entity.get(composition.id, [])
-        assertions = {item[0].authorized_assertion for item in items}
+        assertions = {item.authorized_assertion for item in items}
         _reject_conflicting_authority(composition.id, assertions)
         if AuthorizedAssertion.COMPOSITION_TRUE in assertions:
-            scoped, record = next(
-                item for item in items if item[0].authorized_assertion is AuthorizedAssertion.COMPOSITION_TRUE
-            )
+            record = next(item for item in items if item.authorized_assertion is AuthorizedAssertion.COMPOSITION_TRUE)
             value = CompositionValue.ESTABLISHED_TRUE
             auth = CompositionAuthorizationDecision(
                 candidate_id=composition.id,
                 status=AuthorizationStatus.AUTHORIZED,
                 authorized_value=value,
-                evidence_refs=(scoped.evidence_id,),
+                evidence_refs=record.evidence_ids,
                 policy_version=record.policy_version,
-                reason_code="M21_SCOPED_AUTHORITY",
+                reason_code="M21_TEMPORALLY_BOUND_AUTHORITY",
             )
         elif AuthorizedAssertion.COMPOSITION_FALSE in assertions:
-            scoped, record = next(
-                item for item in items if item[0].authorized_assertion is AuthorizedAssertion.COMPOSITION_FALSE
-            )
+            record = next(item for item in items if item.authorized_assertion is AuthorizedAssertion.COMPOSITION_FALSE)
             value = CompositionValue.ESTABLISHED_FALSE
             auth = CompositionAuthorizationDecision(
                 candidate_id=composition.id,
                 status=AuthorizationStatus.AUTHORIZED,
                 authorized_value=value,
-                evidence_refs=(scoped.evidence_id,),
+                evidence_refs=record.evidence_ids,
                 policy_version=record.policy_version,
-                reason_code="M21_SCOPED_AUTHORITY",
+                reason_code="M21_TEMPORALLY_BOUND_AUTHORITY",
             )
         elif AuthorizedAssertion.T0_UNRESOLVED in assertions:
             value = CompositionValue.T0_UNRESOLVED
             auth = None
         else:
-            # Slot exists in committed artifact but no assertion about sufficiency was
-            # authorized: absence remains NOT_DURABLY_RECORDED, not an error.
             value = CompositionValue.NOT_DURABLY_RECORDED
             auth = None
         compositions.append(replace(composition, value=value, authorization=auth))
