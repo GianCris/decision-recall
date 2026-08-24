@@ -55,7 +55,8 @@ jobs:
             tests/test_decision_recall_m21_postgres.py \
             tests/test_decision_recall_product_golden_loop.py \
             tests/test_decision_recall_product_slot_origin.py \
-            tests/test_decision_recall_product_gemini_compiler.py
+            tests/test_decision_recall_product_gemini_compiler.py \
+            tests/test_decision_recall_pc2_integration.py
 
   repository-offline-regression:
     runs-on: ubuntu-latest
@@ -91,6 +92,7 @@ jobs:
               'test_decision_recall_product_golden_loop.py',
               'test_decision_recall_product_slot_origin.py',
               'test_decision_recall_product_gemini_compiler.py',
+              'test_decision_recall_pc2_integration.py',
               'test_dev_autopsy.py',
               'test_pauto_provider_probe.py',
               'test_round_b_recovered_analysis.py',
