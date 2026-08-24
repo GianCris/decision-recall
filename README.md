@@ -11,22 +11,35 @@ This branch contains the deterministic Decision Recall core plus the earlier DR-
 - M1 / M2 / M2.1: frozen
 - Product Checkpoint 1: frozen
 - Product Checkpoint 2 (Gemini compiler boundary + credentialed live 9/9): frozen
-- Visible Winner Slice: **VWS-0.5 static comprehension gate active**
+- Visible Winner Slice: **VWS-0.5 FAILED; VWS-0.6 narrative-simplification gate active**
 - Target hackathon category: **Collaborative Partner**
 
-Judge-comprehension contract:
+Current comprehension contract:
 
 ```text
-docs/VWS_0_JUDGE_COMPREHENSION_CONTRACT.md
+docs/VWS_0_6_NARRATIVE_SIMPLIFICATION.md
 ```
 
-Static five-frame VWS-0.5 prototype:
+Current bilingual VWS-0.6 prototype:
+
+```text
+prototypes/vws-06/index.html
+```
+
+Previous failed VWS-0.5 prototype is preserved for evidence/history:
 
 ```text
 prototypes/vws-05/index.html
 ```
 
-The static prototype exists only to test whether a cold viewer understands the mechanism before frontend investment. It is explicitly **not** the hackathon Proof-of-Action demo.
+VWS-0.6 exists only to test whether a zero-context viewer can understand the mechanism before production frontend investment. It is explicitly **not** the hackathon Proof-of-Action demo.
+
+The narrative now separates:
+- what mattered to the original decision;
+- what matches the current world;
+- the exact relation that was never established.
+
+The same prototype supports Spanish and English copy from one semantic source. Spanish is used first to remove the language barrier from concept testing; English is tested afterward with English-capable viewers.
 
 Before submission, the real judge-facing backend must be hosted on explicit Google Cloud infrastructure (minimum target: Cloud Run), the repository must include architecture/spin-up documentation, and the submitted video must show a continuous unedited live execution plus visible Google Cloud deployment proof.
 
