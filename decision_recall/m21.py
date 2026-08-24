@@ -384,7 +384,10 @@ def contract_from_artifact(artifact: CanonicalArtifact) -> DecisionContract:
         return ThresholdCondition(
             metric_key=item["metric_key"],
             operator=item["operator"],
-            threshold=float(item["threshold"]),
+            # Preserve the canonical numeric representation from the artifact.
+            # Coercing integer 70 to float 70.0 changed the entity-definition hash
+            # even though the threshold semantics were identical.
+            threshold=item["threshold"],
             minimum_window_days=item["minimum_window_days"],
         )
 
