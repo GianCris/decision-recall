@@ -37,7 +37,7 @@ The stable target is:
 
 The deterministic Decision Recall transitions must execute live during the recording. A previously captured/replayed Gemini result must never be presented as a fresh live model call.
 
-For maximum credibility, the preferred final take should include a real Gemini extraction request in the same continuous run, with bounded infrastructure retry. Because only one/few live calls are needed rather than a 9-call release probe, this is operationally much safer. If a fallback/replay mode exists for product resilience, it must be explicitly labeled and must not be the sole Proof-of-Action evidence.
+For maximum credibility, the preferred final take should include a real Gemini extraction request in the same continuous run, with bounded infrastructure retry. Because only one/few live calls are needed rather than a 9-call release probe, this is operationally much safer. We may record multiple candidate takes, but the submitted take itself must remain continuous/unedited. If a fallback/replay mode exists for product resilience, it must be explicitly labeled and must not be the sole Proof-of-Action evidence.
 
 ## 1. Judge comprehension target
 
