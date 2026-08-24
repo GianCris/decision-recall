@@ -6,7 +6,10 @@ from hashlib import sha256
 from typing import FrozenSet, Tuple
 
 from ..domain import CompositionState, RelationCandidate, RelationSlot, RelationType
-from ..m21 import CANONICALIZATION_V1, CanonicalArtifact, canonical_json
+from ..m21 import CANONICALIZATION_V1, CanonicalArtifact, canonical_hash, canonical_json
+
+
+BINDER_V1 = "PROFILE_BINDER_V1"
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,31 @@ class CaptureProfileTemplate:
 
 
 @dataclass(frozen=True)
+class DecisionFactBinding:
+    entity_id: str
+    semantic_key: str
+    display_text: str
+
+
+@dataclass(frozen=True)
+class DecisionRelationBinding:
+    entity_id: str
+    relation_type: RelationType
+    subject_id: str
+    object_id: str
+
+
+@dataclass(frozen=True)
+class DecisionStructure:
+    """Typed t0 decision structure available independently of future events."""
+
+    decision_id: str
+    decision_display: str
+    facts: Tuple[DecisionFactBinding, ...]
+    relations: Tuple[DecisionRelationBinding, ...]
+
+
+@dataclass(frozen=True)
 class CaptureInstantiationContext:
     decision_id: str
     relation_id: str
@@ -42,7 +70,7 @@ class CaptureInstantiationContext:
 
 @dataclass(frozen=True)
 class CaptureSlotSpec:
-    """Concrete t0 slot produced from a reusable template plus observable bindings."""
+    """Concrete t0 slot produced from a reusable template plus structural bindings."""
 
     semantic_role: str
     slot: RelationSlot
@@ -58,8 +86,19 @@ class CaptureProfile:
     version: str
     template_id: str
     template_version: str
+    template_hash: str
+    decision_structure_hash: str
+    binder_version: str
     question_budget: int
     slots: Tuple[CaptureSlotSpec, ...]
+
+
+@dataclass(frozen=True)
+class ProfileBindingTrace:
+    template_hash: str
+    decision_structure_hash: str
+    binder_version: str
+    instantiated_profile_hash: str
 
 
 @dataclass(frozen=True)
@@ -80,6 +119,36 @@ class CriticalGap:
     selected_at: datetime
 
 
+@dataclass(frozen=True)
+class CaptureSessionState:
+    assignment: ProfileAssignment
+    budget_total: int
+    questions_issued: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.budget_total < 0:
+            raise ValueError("capture question budget cannot be negative")
+        if len(self.questions_issued) > self.budget_total:
+            raise ValueError("issued questions exceed frozen capture budget")
+        if len(self.questions_issued) != len(set(self.questions_issued)):
+            raise ValueError("same question slot cannot consume budget twice")
+
+    @property
+    def remaining_budget(self) -> int:
+        return self.budget_total - len(self.questions_issued)
+
+    def issue(self, slot_id: str) -> "CaptureSessionState":
+        if self.remaining_budget <= 0:
+            raise ValueError("capture question budget exhausted")
+        if slot_id in self.questions_issued:
+            raise ValueError("question slot already issued")
+        return CaptureSessionState(
+            assignment=self.assignment,
+            budget_total=self.budget_total,
+            questions_issued=self.questions_issued + (slot_id,),
+        )
+
+
 def supplier_resilience_capture_template() -> CaptureProfileTemplate:
     return CaptureProfileTemplate(
         id="SUPPLIER_RESILIENCE_CAPTURE",
@@ -89,7 +158,7 @@ def supplier_resilience_capture_template() -> CaptureProfileTemplate:
             CaptureSlotTemplate(
                 semantic_role="REACTION_CAPACITY_HISTORICAL_ROLE",
                 relation_type=RelationType.HISTORICAL_SUPPORT,
-                subject_semantic_role="SUPPLIER_REACTIVATION_DELAY",
+                subject_semantic_role="beacon_reactivation_delay",
                 requires_subject_fact=True,
                 ephemeral_if_unresolved=True,
                 priority=100,
@@ -103,7 +172,11 @@ def instantiate_capture_profile(
     *,
     template: CaptureProfileTemplate,
     context: CaptureInstantiationContext,
+    decision_structure_hash: str = "LEGACY_DIRECT_CONTEXT",
+    binder_version: str = "LEGACY_DIRECT_CONTEXT",
 ) -> CaptureProfile:
+    """Low-level deterministic instantiation; product code should prefer ProfileBinder."""
+
     matches = tuple(
         item for item in template.slots
         if item.subject_semantic_role == context.subject_semantic_role
@@ -127,6 +200,9 @@ def instantiate_capture_profile(
         version="CAPTURE_PROFILE_INSTANCE_V1",
         template_id=template.id,
         template_version=template.version,
+        template_hash=canonical_hash(template),
+        decision_structure_hash=decision_structure_hash,
+        binder_version=binder_version,
         question_budget=template.question_budget,
         slots=(
             CaptureSlotSpec(
@@ -139,6 +215,64 @@ def instantiate_capture_profile(
             ),
         ),
     )
+
+
+class ProfileBinder:
+    """Bind reusable capture policy to typed t0 structure without golden entity IDs."""
+
+    version = BINDER_V1
+
+    def bind(
+        self,
+        *,
+        template: CaptureProfileTemplate,
+        structure: DecisionStructure,
+    ) -> tuple[CaptureProfile, ProfileBindingTrace]:
+        structure_hash = canonical_hash(structure)
+        contexts: list[CaptureInstantiationContext] = []
+        for slot_template in template.slots:
+            facts = tuple(
+                fact for fact in structure.facts
+                if fact.semantic_key == slot_template.subject_semantic_role
+            )
+            if len(facts) != 1:
+                raise ValueError("profile binder requires exactly one structural fact for semantic role")
+            fact = facts[0]
+            relations = tuple(
+                relation for relation in structure.relations
+                if relation.relation_type is slot_template.relation_type
+                and relation.subject_id == fact.entity_id
+                and relation.object_id == structure.decision_id
+            )
+            if len(relations) != 1:
+                raise ValueError("profile binder requires exactly one structural relation slot")
+            relation = relations[0]
+            contexts.append(
+                CaptureInstantiationContext(
+                    decision_id=structure.decision_id,
+                    relation_id=relation.entity_id,
+                    subject_id=fact.entity_id,
+                    subject_semantic_role=fact.semantic_key,
+                    subject_display=fact.display_text,
+                    decision_display=structure.decision_display,
+                )
+            )
+
+        if len(contexts) != 1:
+            raise ValueError("V1 product binder expects exactly one capture template slot")
+        profile = instantiate_capture_profile(
+            template=template,
+            context=contexts[0],
+            decision_structure_hash=structure_hash,
+            binder_version=self.version,
+        )
+        trace = ProfileBindingTrace(
+            template_hash=canonical_hash(template),
+            decision_structure_hash=structure_hash,
+            binder_version=self.version,
+            instantiated_profile_hash=canonical_hash(profile),
+        )
+        return profile, trace
 
 
 def make_capture_profile_artifact(profile: CaptureProfile) -> CanonicalArtifact:
@@ -198,7 +332,7 @@ def select_critical_gaps(
     established_relation_ids: FrozenSet[str],
     selected_at: datetime,
 ) -> Tuple[CriticalGap, ...]:
-    """Select gaps from t0-only structured inputs; there is no future-world input."""
+    """Select relation gaps from t0-only structured inputs; no future-world input exists."""
 
     _verify_assigned_profile(profile, assignment)
     if profile.question_budget == 0:
@@ -234,6 +368,21 @@ def select_critical_gaps(
         )
         for item in eligible[: profile.question_budget]
     )
+
+
+def plan_questions(
+    *,
+    session: CaptureSessionState,
+    eligible_relation_gaps: Tuple[CriticalGap, ...] = (),
+    eligible_composition_ids: Tuple[str, ...] = (),
+) -> Tuple[str, ...]:
+    """Plan only within remaining frozen interaction budget."""
+
+    if session.remaining_budget <= 0:
+        return ()
+    ordered = tuple(gap.slot_id for gap in eligible_relation_gaps) + eligible_composition_ids
+    fresh = tuple(item for item in ordered if item not in session.questions_issued)
+    return fresh[: session.remaining_budget]
 
 
 def candidate_fills_gap(
