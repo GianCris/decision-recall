@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Decision Recall — VWS-0.6 Narrative Simplification</title>
+  <style>
+    :root{
+      --bg:#f4f1ea;--paper:#fffdf8;--ink:#17181c;--muted:#6c6d72;--line:#d9d4ca;
+      --accent:#315efb;--accent-soft:#e8edff;--good:#137a4b;--good-soft:#e6f4ed;
+      --bad:#b33b3b;--bad-soft:#f8e8e8;--warn:#9a6412;--warn-soft:#fff1cf;
+      --shadow:0 22px 60px rgba(38,34,26,.10)
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    button{font:inherit}
+    .shell{max-width:1180px;margin:0 auto;padding:24px}
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:18px}
+    .brand{font-weight:850;letter-spacing:-.035em;font-size:20px}
+    .top-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    .lab{font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--warn);border:1px solid #d7ba7a;background:#fff8e6;border-radius:999px;padding:8px 10px}
+    .lang{display:flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--paper)}
+    .lang button{border:0;background:transparent;padding:6px 10px;border-radius:999px;cursor:pointer;color:var(--muted);font-weight:750}
+    .lang button.active{background:var(--ink);color:white}
+    .stage{min-height:690px;background:var(--paper);border:1px solid var(--line);border-radius:28px;box-shadow:var(--shadow);overflow:hidden;position:relative}
+    .state{display:none;min-height:690px;padding:48px 54px}
+    .state.active{display:block;animation:enter .28s ease-out both}
+    @keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+    .kicker{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:800;margin-bottom:18px}
+    h1{font-size:58px;line-height:1.02;letter-spacing:-.055em;margin:0;max-width:900px}
+    h2{font-size:34px;line-height:1.12;letter-spacing:-.035em;margin:0}
+    .lede{font-size:21px;line-height:1.5;color:var(--muted);max-width:760px;margin:18px 0 0}
+    .supplier-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:34px}
+    .supplier{border:1px solid var(--line);border-radius:20px;padding:22px;background:#fff}
+    .supplier-name{font-size:24px;font-weight:850;letter-spacing:-.025em;margin-bottom:9px}
+    .fact{font-size:18px;line-height:1.45;color:#313238}
+    .decision{margin-top:18px;border-left:5px solid var(--accent);background:var(--accent-soft);border-radius:16px;padding:18px 20px;display:flex;gap:16px;align-items:flex-start}
+    .decision strong{display:block;font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:#4058a8;margin-bottom:5px}
+    .decision span{font-size:21px;font-weight:800;line-height:1.25}
+    .primary{border:0;background:var(--ink);color:white;border-radius:14px;padding:14px 20px;font-weight:800;cursor:pointer;box-shadow:0 8px 18px rgba(23,24,28,.12)}
+    .primary:hover{transform:translateY(-1px)}
+    .secondary{border:1px solid var(--line);background:white;color:var(--muted);border-radius:12px;padding:10px 14px;cursor:pointer}
+    .cta-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:28px}
+    .center{max-width:850px;margin:70px auto 0;text-align:center}
+    .question{font-size:44px;line-height:1.12;letter-spacing:-.045em;font-weight:850;margin:24px auto;max-width:820px}
+    .subtle{font-size:15px;color:var(--muted);line-height:1.5}
+    .capture-mark{width:74px;height:74px;border-radius:50%;display:grid;place-items:center;margin:0 auto 24px;background:var(--good-soft);color:var(--good);font-size:36px;font-weight:900}
+    .capture-line{display:flex;align-items:center;justify-content:center;gap:12px;margin:34px auto 0;max-width:600px}
+    .node{width:28px;height:28px;border-radius:50%;border:3px solid var(--warn);display:grid;place-items:center;font-weight:900;color:var(--warn);background:white}
+    .node.good{border-color:var(--good);background:var(--good);color:white}
+    .connector{height:3px;background:var(--line);flex:1;position:relative;overflow:hidden}
+    .connector.fill::after{content:"";position:absolute;inset:0;background:var(--good);animation:fill .65s ease-out both}
+    @keyframes fill{from{transform:translateX(-100%)}to{transform:none}}
+    .world-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;flex-wrap:wrap}
+    .metric{font-size:19px;color:var(--muted);margin-top:10px}
+    .metric strong{color:var(--ink)}
+    .layers{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px}
+    .layer{border:1px solid var(--line);border-radius:20px;padding:22px;background:white}
+    .layer h3{margin:0 0 18px;font-size:13px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted)}
+    .thread{display:grid;grid-template-columns:170px 1fr auto;gap:14px;align-items:center;margin:18px 0}
+    .thread-label{font-weight:800;line-height:1.25}
+    .track{height:4px;background:var(--line);position:relative;border-radius:999px}
+    .track::before{content:"";position:absolute;width:12px;height:12px;border-radius:50%;left:-2px;top:50%;transform:translateY(-50%);background:var(--good)}
+    .track.good::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;right:-2px;top:50%;transform:translateY(-50%);background:var(--good)}
+    .track.bad::after{content:"×";position:absolute;right:-7px;top:50%;transform:translateY(-56%);font-size:26px;font-weight:900;color:var(--bad);background:white;line-height:1}
+    .status{font-size:12px;font-weight:850;letter-spacing:.04em;border-radius:999px;padding:7px 9px;white-space:nowrap}
+    .status.good{background:var(--good-soft);color:var(--good)}
+    .status.bad{background:var(--bad-soft);color:var(--bad)}
+    .separation{margin-top:18px;padding:16px 18px;border-radius:15px;background:#f7f5f0;color:#3e3f44;font-size:18px;font-weight:750}
+    .reuse-grid{display:grid;grid-template-columns:1fr;gap:22px;margin-top:24px}
+    .gap-visual{display:grid;grid-template-columns:auto 1fr auto 1fr auto;align-items:center;gap:12px;max-width:820px;margin:34px auto 20px}
+    .gap-label{font-weight:850;text-align:center}
+    .gap-line{height:4px;background:var(--good);border-radius:999px}
+    .gap-line.missing{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,transparent 9px 16px);height:4px}
+    .gap-q{width:50px;height:50px;border-radius:50%;display:grid;place-items:center;background:var(--warn-soft);color:var(--warn);font-size:26px;font-weight:900;border:1px solid #e3c16f}
+    .gap-note{text-align:center;color:var(--warn);font-weight:800;margin:8px auto 0}
+    .hero{text-align:center;margin-top:28px}
+    .hero h1{font-size:64px;max-width:none}
+    .result{display:inline-flex;margin-top:16px;border-radius:999px;padding:9px 12px;background:var(--warn-soft);color:var(--warn);font-size:12px;font-weight:900;letter-spacing:.08em}
+    .hero-copy{font-size:22px;line-height:1.45;max-width:770px;margin:22px auto 0}
+    .foot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;color:var(--muted);font-size:12px}
+    .reset{border:0;background:transparent;color:var(--muted);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+    @media(max-width:760px){
+      .shell{padding:12px}.stage,.state{min-height:720px}.state{padding:28px 22px}.topbar{align-items:flex-start}.lab{display:none}
+      h1{font-size:40px}.question{font-size:32px}.supplier-grid,.layers{grid-template-columns:1fr}.thread{grid-template-columns:130px 1fr}.thread .status{grid-column:2}.gap-visual{grid-template-columns:1fr}.gap-line{height:34px;width:4px;justify-self:center}.gap-line.missing{width:4px;height:34px;background:repeating-linear-gradient(180deg,var(--warn) 0 9px,transparent 9px 16px)}.hero h1{font-size:44px}
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">Decision Recall</div>
+    <div class="top-actions">
+      <div class="lab">VWS-0.6 · comprehension prototype · not live</div>
+      <div class="lang"><button id="esBtn">ES</button><button id="enBtn" class="active">EN</button></div>
+    </div>
+  </div>
+
+  <main class="stage">
+    <section class="state active" data-state="1">
+      <div class="kicker" data-i18n="s1k"></div>
+      <h1 data-i18n="s1h"></h1>
+      <p class="lede" data-i18n="s1l"></p>
+      <div class="supplier-grid">
+        <div class="supplier"><div class="supplier-name">Apex</div><div class="fact" data-i18n="apexFact"></div></div>
+        <div class="supplier"><div class="supplier-name">Beacon</div><div class="fact" data-i18n="beaconFact"></div></div>
+      </div>
+      <div class="decision"><div>→</div><div><strong data-i18n="decisionLabel"></strong><span data-i18n="decisionText"></span></div></div>
+      <div class="cta-row"><button class="primary" data-go="2" data-i18n="s1cta"></button></div>
+    </section>
+
+    <section class="state" data-state="2">
+      <div class="center">
+        <div class="kicker" data-i18n="s2k"></div>
+        <h2 data-i18n="s2h"></h2>
+        <div class="question" data-i18n="s2q"></div>
+        <p class="subtle" data-i18n="s2sub"></p>
+        <div class="cta-row" style="justify-content:center"><button class="primary" data-go="3" data-i18n="yes"></button><button class="secondary" data-i18n="notSure"></button><button class="secondary" data-i18n="no"></button></div>
+      </div>
+    </section>
+
+    <section class="state" data-state="3">
+      <div class="center">
+        <div class="capture-mark">✓</div>
+        <div class="kicker" data-i18n="s3k"></div>
+        <h2 data-i18n="s3h"></h2>
+        <p class="lede" style="margin-left:auto;margin-right:auto" data-i18n="s3l"></p>
+        <div class="capture-line"><div class="node">?</div><div class="connector fill"></div><div class="node good">✓</div></div>
+        <p class="subtle" data-i18n="s3sub"></p>
+        <div class="cta-row" style="justify-content:center"><button class="primary" data-go="4" data-i18n="s3cta"></button></div>
+      </div>
+    </section>
+
+    <section class="state" data-state="4">
+      <div class="kicker" data-i18n="s4k"></div>
+      <div class="world-head"><div><h1 data-i18n="s4h"></h1><div class="metric" data-i18n="s4metric"></div></div></div>
+      <div class="layers">
+        <div class="layer">
+          <h3 data-i18n="thenTitle"></h3>
+          <div class="thread"><div class="thread-label" data-i18n="apexThen"></div><div class="track good"></div><span class="status good" data-i18n="recorded"></span></div>
+          <div class="thread"><div class="thread-label" data-i18n="beaconThen"></div><div class="track good"></div><span class="status good" data-i18n="recorded"></span></div>
+        </div>
+        <div class="layer">
+          <h3 data-i18n="nowTitle"></h3>
+          <div class="thread"><div class="thread-label" data-i18n="apexNow"></div><div class="track bad"></div><span class="status bad" data-i18n="noLonger"></span></div>
+          <div class="thread"><div class="thread-label" data-i18n="beaconNow"></div><div class="track good"></div><span class="status good" data-i18n="stillMatches"></span></div>
+        </div>
+      </div>
+      <div class="separation" data-i18n="separation"></div>
+      <div class="cta-row"><button class="primary" data-go="5" data-i18n="s4cta"></button></div>
+    </section>
+
+    <section class="state" data-state="5">
+      <div class="center" style="margin-top:34px">
+        <div class="kicker" data-i18n="s5k"></div>
+        <h2 data-i18n="s5h"></h2>
+        <p class="lede" style="margin-left:auto;margin-right:auto" data-i18n="s5q"></p>
+        <div class="gap-visual">
+          <div class="gap-label" data-i18n="beaconMattered"></div><div class="gap-line"></div><div class="gap-q">?</div><div class="gap-line missing"></div><div class="gap-label" data-i18n="reuse"></div>
+        </div>
+        <div class="gap-note" data-i18n="gapNote"></div>
+        <div class="hero"><h1 data-i18n="hero"></h1><div class="result" data-i18n="result"></div><div class="hero-copy"><strong data-i18n="hero1"></strong><br><span data-i18n="hero2"></span></div></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="foot"><span id="progress"></span><button class="reset" id="reset" data-i18n="reset"></button></div>
+</div>
+<script>
+const copy={
+  en:{
+    s1k:'1 · Situation',s1h:'A company relies on two suppliers.',s1l:'At decision time, the company knew two simple facts:',
+    apexFact:'⚠ Deliveries have been unstable.',beaconFact:'⏱ Takes about 10 weeks to restart.',decisionLabel:'Decision',decisionText:'Keep access to both suppliers for 6 months.',s1cta:'See what Decision Recall noticed →',
+    s2k:'2 · Missing knowledge',s2h:"Decision Recall found something the records can't tell us.",s2q:'Was keeping Beacon available an important reason for this decision?',s2sub:'The records do not establish the answer. Decision Recall asks instead of guessing.',yes:'Yes',notSure:'Not sure',no:'No',
+    s3k:'3 · Captured',s3h:'Captured at decision time.',s3l:'Keeping Beacon available was part of the original reasoning.',s3sub:'A missing piece of the decision record is now established from the person’s answer.',s3cta:'See what happens later →',
+    s4k:'4 · Six weeks later',s4h:'The world changes.',s4metric:'Apex improves to 98.7% on-time delivery over 30 days.',thenTitle:'What mattered then',nowTitle:'What matches now',apexThen:'Apex instability',beaconThen:'Keeping Beacon available',recorded:'RECORDED',apexNow:'Apex instability',beaconNow:'Beacon restart delay',noLonger:'NO LONGER MATCHES',stillMatches:'STILL MATCHES',separation:"The world changed. The historical record didn't.",s4cta:'A similar decision comes up →',
+    s5k:'5 · Reuse boundary',s5h:'A similar decision comes up again.',s5q:'Can we reuse the old decision?',beaconMattered:'Beacon mattered',reuse:'Reuse',gapNote:'Was that reason enough by itself?',hero:"I CAN'T ESTABLISH THAT",result:'REUSE STATUS · INSUFFICIENT EVIDENCE',hero1:'We know Beacon mattered to the original decision.',hero2:'We never established whether that reason was enough on its own.',reset:'Restart test',progress:'State {n} of 5'
+  },
+  es:{
+    s1k:'1 · Situación',s1h:'Una empresa depende de dos proveedores.',s1l:'Al tomar la decisión, la empresa conocía dos hechos simples:',
+    apexFact:'⚠ Sus entregas han sido inestables.',beaconFact:'⏱ Tarda unas 10 semanas en volver a operar.',decisionLabel:'Decisión',decisionText:'Mantener acceso a ambos proveedores durante 6 meses.',s1cta:'Ver qué detectó Decision Recall →',
+    s2k:'2 · Conocimiento faltante',s2h:'Decision Recall encontró algo que los registros no pueden decirnos.',s2q:'¿Mantener disponible a Beacon fue una razón importante para esta decisión?',s2sub:'Los registros no establecen la respuesta. Decision Recall pregunta en lugar de adivinar.',yes:'Sí',notSure:'No estoy seguro',no:'No',
+    s3k:'3 · Capturado',s3h:'Capturado al momento de decidir.',s3l:'Mantener disponible a Beacon formó parte del razonamiento original.',s3sub:'Una pieza que faltaba en el registro de la decisión ahora quedó establecida a partir de la respuesta de la persona.',s3cta:'Ver qué ocurre después →',
+    s4k:'4 · Seis semanas después',s4h:'El mundo cambia.',s4metric:'Apex mejora hasta 98.7% de entregas a tiempo durante 30 días.',thenTitle:'Lo que importó entonces',nowTitle:'Lo que coincide ahora',apexThen:'Inestabilidad de Apex',beaconThen:'Mantener disponible a Beacon',recorded:'REGISTRADO',apexNow:'Inestabilidad de Apex',beaconNow:'Demora para reactivar Beacon',noLonger:'YA NO COINCIDE',stillMatches:'TODAVÍA COINCIDE',separation:'El mundo cambió. El registro histórico no.',s4cta:'Aparece una decisión parecida →',
+    s5k:'5 · Límite de reutilización',s5h:'Aparece una decisión parecida.',s5q:'¿Podemos reutilizar la decisión anterior?',beaconMattered:'Beacon importó',reuse:'Reutilizar',gapNote:'¿Esa razón era suficiente por sí sola?',hero:'NO PUEDO ESTABLECER ESO',result:'ESTADO DE REUTILIZACIÓN · EVIDENCIA INSUFICIENTE',hero1:'Sabemos que Beacon importó en la decisión original.',hero2:'Nunca establecimos si esa razón era suficiente por sí sola.',reset:'Reiniciar prueba',progress:'Estado {n} de 5'
+  }
+};
+let lang='en',state=1;
+const states=[...document.querySelectorAll('.state')];
+function render(){
+  document.documentElement.lang=lang;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{const k=el.dataset.i18n;if(copy[lang][k]!==undefined)el.textContent=copy[lang][k]});
+  document.getElementById('esBtn').classList.toggle('active',lang==='es');
+  document.getElementById('enBtn').classList.toggle('active',lang==='en');
+  states.forEach(s=>s.classList.toggle('active',Number(s.dataset.state)===state));
+  document.getElementById('progress').textContent=copy[lang].progress.replace('{n}',state);
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-go]');if(b){state=Number(b.dataset.go);render();window.scrollTo({top:0,behavior:'smooth'})}});
+document.getElementById('esBtn').onclick=()=>{lang='es';render()};
+document.getElementById('enBtn').onclick=()=>{lang='en';render()};
+document.getElementById('reset').onclick=()=>{state=1;render();window.scrollTo({top:0,behavior:'smooth'})};
+render();
+</script>
+</body>
+</html>
