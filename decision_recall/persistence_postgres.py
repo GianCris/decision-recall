@@ -103,6 +103,12 @@ authorization_records = Table(
     Column("authorized_assertion", String(100), nullable=False),
     Column("policy_version", String(100), nullable=False),
     Column("policy_hash", String(128), nullable=False),
+    Column("contract_artifact_id", String(300), nullable=False),
+    Column("entity_definition_hash", String(128), nullable=False),
+    Column("scope", String(80), nullable=False),
+    Column("scope_ref", String(200), nullable=False),
+    Column("target_id", String(200)),
+    Column("target_version", String(120)),
 )
 
 authorization_evidence = Table(
@@ -120,6 +126,9 @@ decision_commits = Table(
     Column("contract_version", String(100), nullable=False),
     Column("capture_profile_version", String(200), nullable=False),
     Column("capture_profile_hash", String(128), nullable=False),
+    Column("contract_artifact_id", String(300), nullable=False),
+    Column("contract_hash", String(128), nullable=False),
+    Column("canonicalization_version", String(80), nullable=False),
 )
 
 evaluation_snapshots = Table(
@@ -137,6 +146,14 @@ evaluation_snapshots = Table(
     Column("engine_version", String(200), nullable=False),
     Column("engine_hash", String(128), nullable=False),
     Column("result_fingerprint", String(128), nullable=False),
+    Column("decision_commit_id", String(200), nullable=False),
+    Column("contract_hash", String(128), nullable=False),
+    Column("world_time", DateTime(timezone=True)),
+    Column("target_artifact_id", String(300), nullable=False),
+    Column("world_schema_artifact_id", String(300), nullable=False),
+    Column("world_schema_hash", String(128), nullable=False),
+    Column("canonical_result_json", Text, nullable=False),
+    Column("canonicalization_version", String(80), nullable=False),
 )
 
 raw_world_evidence = Table(
@@ -210,6 +227,9 @@ class PostgresTemporalLedger:
     def drop_schema(self) -> None:
         metadata.drop_all(self.engine)
 
+    def dispose(self) -> None:
+        self.engine.dispose()
+
     @property
     def head_seq(self) -> int:
         with self.engine.connect() as conn:
@@ -251,8 +271,6 @@ class PostgresTemporalLedger:
             batch_seq = previous_head + 1
             conn.execute(insert(ledger_batches).values(batch_seq=batch_seq, recorded_at=recorded_at))
 
-            # Typed immutable records are the semantic source of truth. Insert them
-            # in dependency order; ledger entry ordinals still preserve caller order.
             for pending in sorted(entries, key=lambda item: _KIND_ORDER[item.kind]):
                 self._insert_typed(conn, pending.payload)
 
@@ -419,6 +437,12 @@ class PostgresTemporalLedger:
                     authorized_assertion=payload.authorized_assertion.value,
                     policy_version=payload.policy_version,
                     policy_hash=payload.policy_hash,
+                    contract_artifact_id=payload.contract_artifact_id,
+                    entity_definition_hash=payload.entity_definition_hash,
+                    scope=payload.scope,
+                    scope_ref=payload.scope_ref,
+                    target_id=payload.target_id,
+                    target_version=payload.target_version,
                 )
             )
             conn.execute(
@@ -505,6 +529,12 @@ class PostgresTemporalLedger:
                 evidence_ids=evidence_ids,
                 policy_version=row.policy_version,
                 policy_hash=row.policy_hash,
+                contract_artifact_id=row.contract_artifact_id,
+                entity_definition_hash=row.entity_definition_hash,
+                scope=row.scope,
+                scope_ref=row.scope_ref,
+                target_id=row.target_id,
+                target_version=row.target_version,
             )
         if kind is LedgerEntryKind.DECISION_COMMIT:
             row = conn.execute(select(decision_commits).where(decision_commits.c.id == entry_id)).one()
