@@ -76,6 +76,11 @@ from .compiler import (
     SemanticCandidateResolver,
     SourceDocument,
 )
+from .declaration import (
+    CaptureAnswer,
+    declaration_to_evidence,
+    make_structured_capture_declaration,
+)
 from .models import (
     CandidateView,
     CaptureProfileView,
@@ -438,9 +443,10 @@ def _world_evidence(
 def run_golden_decision(
     *,
     answer_r2: bool = True,
+    capture_answer: CaptureAnswer | None = None,
     compiler: CandidateCompiler | None = None,
 ) -> GoldenLoopResult:
-    """Trust-hardened winner loop: grounded t0 -> gap -> answer -> strict replay -> C1."""
+    """Trust-hardened winner loop: grounded t0 -> gap -> structured human authority -> strict replay -> C1."""
 
     compiler = compiler or DeterministicGoldenCompiler()
     preparation = prepare_golden_capture(compiler=compiler)
@@ -464,50 +470,42 @@ def run_golden_decision(
     for artifact in (contract_artifact, target_artifact, schema_artifact):
         registry.add_artifact(artifact)
 
-    raw_response = (
-        "Yes. Beacon's roughly 10-week reactivation delay materially influenced the decision."
-        if answer_r2
-        else "No answer provided."
-    )
-    response_source = SourceDocument(
-        source_id="user-gap-response-r2",
-        content=raw_response,
-        provenance_type=ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
-        observed_at=T0 - timedelta(seconds=1),
-    )
-    response_candidates = compiler.compile_response(
-        response_source=response_source,
+    if capture_answer is None:
+        capture_answer = CaptureAnswer.YES if answer_r2 else CaptureAnswer.SKIP
+    declaration = make_structured_capture_declaration(
+        session=session,
         gap=gaps[0],
-        profile=profile,
+        answer=capture_answer,
+        answered_at=T0 - timedelta(seconds=1),
+        optional_note=(
+            "Beacon's roughly 10-week reactivation delay materially influenced the decision."
+            if capture_answer is CaptureAnswer.YES
+            else ""
+        ),
     )
-    if len(response_candidates.candidates) != 1:
-        raise ValueError("R2 remains NOT_DURABLY_RECORDED without authorized contemporaneous gap evidence")
-
-    r2_grounded = SemanticCandidateResolver().resolve(
-        candidate=response_candidates.candidates[0],
-        contract=contract,
-        profile=profile,
-    )
-    response_observable = ObservableDecisionBundle(contract.id, (response_source,))
-    r2_evidence = EvidenceResolver().resolve(
-        observable=response_observable,
-        candidate=r2_grounded,
+    r2_evidence = declaration_to_evidence(
+        declaration=declaration,
+        gap=gaps[0],
         evidence_id="E-R2-ELICITED-PRODUCT-V1",
     )
-    relation = contract.relation(r2_grounded.entity_id)
+    ledger.append_batch(
+        recorded_at=T0 - timedelta(milliseconds=500),
+        entries=(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, r2_evidence),),
+    )
+    if capture_answer is not CaptureAnswer.YES or len(r2_evidence.candidate_assertions) != 1:
+        raise ValueError("R2 remains NOT_DURABLY_RECORDED without an explicit authorized YES declaration")
+
+    r2_entity_id = gaps[0].slot_id
+    relation = contract.relation(r2_entity_id)
     r2_candidate = RelationCandidate(
-        id=r2_grounded.candidate_id,
+        id=declaration.id,
         relation_type=relation.relation_type,
         subject_id=relation.subject_id,
         object_id=relation.object_id,
         evidence_refs=(r2_evidence.id,),
     )
     if not candidate_fills_gap(profile=profile, gap=gaps[0], candidate=r2_candidate):
-        raise RuntimeError("response candidate does not fill the pre-assigned slot")
-    ledger.append_batch(
-        recorded_at=T0 - timedelta(milliseconds=500),
-        entries=(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, r2_evidence),),
-    )
+        raise RuntimeError("structured declaration does not fill the pre-assigned slot")
 
     precommit_by_entity = {
         item.candidate_assertions[0].entity_id: item
@@ -547,7 +545,7 @@ def run_golden_decision(
         ("F1", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F1"], False),
         ("F2", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F2"], False),
         ("R1", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, precommit_by_entity["R1"], False),
-        (r2_grounded.entity_id, AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence, False),
+        (r2_entity_id, AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence, False),
         ("M1", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M1"], True),
         ("M2", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M2"], True),
         ("RC1", AuthorizedAssertion.REVISIT_RULE, rule_evidence["RC1"], True),
@@ -598,7 +596,7 @@ def run_golden_decision(
         authority_policy=authority_policy,
         target=target,
     )
-    r2 = materialized.relation(r2_grounded.entity_id)
+    r2 = materialized.relation(r2_entity_id)
     if r2.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED:
         raise RuntimeError("captured relation must become ESTABLISHED only through temporal authority")
 
