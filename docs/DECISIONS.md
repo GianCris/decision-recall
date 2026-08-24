@@ -23,3 +23,8 @@ Before implementing the production presentation adapter, Decision Recall must pa
 
 ## D-008 — Cloud Run and live Proof of Action are submission P0
 Cloud Run is the minimum explicit Google Cloud infrastructure target before final recording. The submitted video must show a continuous, unedited live execution of the real agent path and visible Google Cloud deployment proof. Static/replay paths may support resilience and explanation but must be labeled and cannot replace Proof of Action.
+
+## D-009 — VWS-0.5 failed; VWS-0.6 narrative simplification is mandatory
+Cold-viewer feedback on VWS-0.5 showed that the presentation exposed engine vocabulary and domain details before viewers had a usable mental model. English proficiency contaminated part of the test, but translated explanation did not recover comprehension. Therefore VWS-0.5 is a presentation FAIL, not a semantic failure.
+
+VWS-0.6 must simplify the story without changing frozen semantics. Historical role and current-world match remain visually separate dimensions. Supplier hierarchy must not be invented. The main flow excludes Gemini/provenance/ontology vocabulary and uses one guided action per state. Narrative comprehension is tested first in Spanish to remove the language barrier, then in English with English-capable viewers. Production adapter/frontend work begins only after those gates pass.
