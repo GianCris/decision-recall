@@ -112,10 +112,10 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(len(transport.records[0]["infra_errors_seen"]), 1)
         self.assertEqual(sleeps, [2.0])
 
-    def test_503_retries_then_records_single_semantic_response(self):
+    def test_raw_503_retries_then_records_single_semantic_response(self):
         payload = {"candidates": []}
         delegate = _ScriptedDelegate(
-            [GeminiCompilerError("503 SERVICE_UNAVAILABLE"), payload]
+            [RuntimeError("503 SERVICE_UNAVAILABLE"), payload]
         )
         transport = RecordingTransport(
             delegate,
@@ -132,6 +132,7 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(result, payload)
         self.assertEqual(delegate.calls, 2)
         self.assertEqual(transport.records[0]["infra_attempt_count"], 2)
+        self.assertEqual(transport.records[0]["infra_errors_seen"][0]["error_type"], "RuntimeError")
 
     def test_semantic_wrong_answer_is_not_retried(self):
         wrong_payload = {
