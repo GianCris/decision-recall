@@ -164,6 +164,26 @@ class ProductCheckpoint2ReleaseGateTests(unittest.TestCase):
         self.assertEqual(delegate.calls, 1)
         self.assertEqual(transport.records[0]["infra_attempt_count"], 1)
 
+    def test_non_infra_compiler_error_is_never_retried(self):
+        delegate = _ScriptedDelegate([GeminiCompilerError("Gemini candidate quote is not an exact span")])
+        sleeps = []
+        transport = RecordingTransport(
+            delegate,
+            sleep_fn=sleeps.append,
+            jitter_seconds=0,
+        )
+
+        with self.assertRaisesRegex(GeminiCompilerError, "not an exact span"):
+            transport.generate_json(
+                system_instruction="system",
+                prompt="prompt",
+                response_schema={"type": "object"},
+            )
+
+        self.assertEqual(delegate.calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(transport.records, [])
+
     def test_exhausted_infra_retries_return_partial_failed_artifact(self):
         delegate = _ScriptedDelegate(
             [GeminiCompilerError("429 RESOURCE_EXHAUSTED") for _ in range(4)]
