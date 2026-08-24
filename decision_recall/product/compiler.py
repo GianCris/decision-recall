@@ -19,6 +19,7 @@ from .capture import CaptureProfile, CriticalGap
 class CandidateKind(str, Enum):
     FACT = "fact"
     HISTORICAL_ROLE = "historical_role"
+    ELICITED_HISTORICAL_ROLE = "elicited_historical_role"
 
 
 @dataclass(frozen=True)
@@ -102,8 +103,8 @@ class CandidateCompiler(Protocol):
 class SemanticCandidateResolver:
     """Resolve semantic keys only inside the controlled contract/profile surface.
 
-    Observable compilation cannot establish an unresolved capture-profile slot. A
-    profile slot is resolvable only on the explicitly elicited-response path.
+    Normal observable compilation cannot establish an unresolved capture-profile
+    slot. Only a separately typed elicited-response candidate can resolve one.
     """
 
     @staticmethod
@@ -116,7 +117,6 @@ class SemanticCandidateResolver:
         candidate: GroundedCandidate,
         contract: DecisionContract,
         profile: CaptureProfile,
-        allow_profile_slots: bool = False,
     ) -> ResolvedGroundedCandidate:
         if candidate.kind is CandidateKind.FACT:
             matches = tuple(
@@ -127,40 +127,40 @@ class SemanticCandidateResolver:
                 raise ValueError("fact semantic key is unknown or ambiguous in allowed contract surface")
             entity_id = matches[0].id
             assertion = AuthorizedAssertion.ESTABLISHED_FACT
-        elif candidate.kind is CandidateKind.HISTORICAL_ROLE:
+        elif candidate.kind is CandidateKind.ELICITED_HISTORICAL_ROLE:
             profile_matches = tuple(
                 item for item in profile.slots
                 if item.semantic_role == candidate.semantic_key
             )
-            if profile_matches:
-                if not allow_profile_slots:
-                    raise ValueError("unresolved capture slot cannot be established from observable compilation")
-                if len(profile_matches) != 1:
-                    raise ValueError("historical semantic key is ambiguous in assigned profile")
-                slot = profile_matches[0].slot
-                relations = tuple(
-                    relation for relation in contract.historical_relations
-                    if relation.id == slot.id
-                    and relation.relation_type is slot.relation_type
-                    and relation.subject_id == slot.subject_id
-                    and relation.object_id == slot.object_id
-                )
-                if len(relations) != 1:
-                    raise ValueError("assigned relation slot is not present in contract semantic surface")
-                entity_id = relations[0].id
-            else:
-                matches = []
-                for relation in contract.historical_relations:
-                    if relation.relation_type is not RelationType.HISTORICAL_SUPPORT:
-                        continue
-                    subject = next((claim for claim in contract.claims if claim.id == relation.subject_id), None)
-                    if subject is None:
-                        continue
-                    if self.historical_key(subject.predicate_key) == candidate.semantic_key:
-                        matches.append(relation)
-                if len(matches) != 1:
-                    raise ValueError("historical semantic key is unknown or ambiguous in allowed contract surface")
-                entity_id = matches[0].id
+            if len(profile_matches) != 1:
+                raise ValueError("elicited historical semantic key is not the assigned capture slot")
+            slot = profile_matches[0].slot
+            relations = tuple(
+                relation for relation in contract.historical_relations
+                if relation.id == slot.id
+                and relation.relation_type is slot.relation_type
+                and relation.subject_id == slot.subject_id
+                and relation.object_id == slot.object_id
+            )
+            if len(relations) != 1:
+                raise ValueError("assigned relation slot is not present in contract semantic surface")
+            entity_id = relations[0].id
+            assertion = AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
+        elif candidate.kind is CandidateKind.HISTORICAL_ROLE:
+            if any(item.semantic_role == candidate.semantic_key for item in profile.slots):
+                raise ValueError("unresolved capture slot cannot be established from observable compilation")
+            matches = []
+            for relation in contract.historical_relations:
+                if relation.relation_type is not RelationType.HISTORICAL_SUPPORT:
+                    continue
+                subject = next((claim for claim in contract.claims if claim.id == relation.subject_id), None)
+                if subject is None:
+                    continue
+                if self.historical_key(subject.predicate_key) == candidate.semantic_key:
+                    matches.append(relation)
+            if len(matches) != 1:
+                raise ValueError("historical semantic key is unknown or ambiguous in allowed contract surface")
+            entity_id = matches[0].id
             assertion = AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
         else:  # pragma: no cover
             raise ValueError("unsupported candidate kind")
@@ -237,7 +237,7 @@ class DeterministicGoldenCompiler:
                 GroundedCandidate(
                     "GC-R2-RESPONSE",
                     slot_spec.semantic_role,
-                    CandidateKind.HISTORICAL_ROLE,
+                    CandidateKind.ELICITED_HISTORICAL_ROLE,
                     response_source.source_id,
                     0,
                     len(response_source.content),
