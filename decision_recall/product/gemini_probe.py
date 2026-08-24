@@ -97,12 +97,17 @@ class RecordingTransport:
                     prompt=prompt,
                     response_schema=response_schema,
                 )
-            except GeminiCompilerError as exc:
+            except Exception as exc:
+                # Some Gen AI SDK 503s surface as server exceptions before the
+                # production transport wraps them. The live harness handles only
+                # explicitly recognizable transient infrastructure failures here;
+                # every other exception is re-raised unchanged.
                 if not _is_retryable_infra_error(exc):
                     raise
                 infra_errors.append(
                     {
                         "infra_attempt": infra_attempt,
+                        "error_type": type(exc).__name__,
                         "error": str(exc),
                     }
                 )
