@@ -6,6 +6,28 @@ Agents can remember what was decided. Decision Recall determines when recorded r
 
 This branch contains the deterministic Decision Recall core plus the earlier DR-Bench research harness.
 
+## Current product checkpoint
+
+- M1 / M2 / M2.1: frozen
+- Product Checkpoint 1: frozen
+- Product Checkpoint 2 (Gemini compiler boundary + credentialed live 9/9): frozen
+- Visible Winner Slice: active
+- Target hackathon category: **Collaborative Partner**
+
+Judge-comprehension contract:
+
+```text
+docs/VWS_0_JUDGE_COMPREHENSION_CONTRACT.md
+```
+
+Static VWS-0.5 prototype for cold-viewer testing:
+
+```text
+prototypes/vws-05/index.html
+```
+
+The prototype is explicitly not the hackathon Proof-of-Action demo. The final submission path must execute live, run the backend on Google Cloud infrastructure (minimum target: Cloud Run), and show Google Cloud deployment evidence in the continuous demo video.
+
 ## Core architecture
 
 ```text
