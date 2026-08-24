@@ -14,10 +14,14 @@ Reasoning against the current official rules:
 - Collaborative Partner explicitly rewards clarifying questions, feedback capture/adaptation, and active synthesis or mutation of data. Decision Recall asks exactly one bounded clarification, converts the authorized answer into durable canonical state, and later reevaluates that state against a changed world.
 - Fortified Enterprise Fleet expects a scalable institutional multi-agent network and cross-department lifecycle/security/observability capabilities. Adding those solely to fit the track would dilute the product thesis and consume time without strengthening the core mechanism.
 
+The Stage-Two architecture subcriteria on the current rules page use legacy/mismatched labels (`Continuous Action Engine`, `Evolving Knowledge Engine`, `Multi-Agent Nexus`). Do not contort Decision Recall around an inferred mapping of those labels. Category fit is based on the explicit current Taskmaster / Collaborative Partner / Fortified Enterprise Fleet descriptions and Collaborative Partner-specific Innovation criterion.
+
 Freeze rule: use Collaborative Partner unless the official rules materially change or a concrete implementation fact falsifies this fit. Do not redesign the product merely to imitate another track.
 
 ### Mandatory Google Cloud P0
 Before recording/submission, Decision Recall must use at least one explicit Google Cloud infrastructure service in addition to Gemini/Vertex access. The minimum target is **Cloud Run** hosting the judge-facing backend.
+
+This deliberately chooses the unambiguous compliance path. The rules list Gemini/Vertex access and Google Cloud infrastructure as separate mandatory requirements; therefore we will not rely on an interpretation that Vertex model access alone satisfies the infrastructure requirement.
 
 Required before final video:
 - hosted backend on Cloud Run;
