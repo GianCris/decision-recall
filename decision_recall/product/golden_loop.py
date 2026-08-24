@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone, datetime
 
 from ..domain import (
     CompositionValue,
@@ -49,15 +49,20 @@ from ..temporal import (
     source_hash,
 )
 from .capture import (
-    CaptureInstantiationContext,
     CaptureProfile,
+    CaptureSessionState,
     CriticalGap,
+    DecisionFactBinding,
+    DecisionRelationBinding,
+    DecisionStructure,
     ProfileAssignment,
+    ProfileBinder,
+    ProfileBindingTrace,
     assign_profile,
     candidate_fills_gap,
     composition_question_eligible,
-    instantiate_capture_profile,
     make_capture_profile_artifact,
+    plan_questions,
     select_critical_gaps,
     supplier_resilience_capture_template,
 )
@@ -67,6 +72,8 @@ from .compiler import (
     DeterministicGoldenCompiler,
     EvidenceResolver,
     ObservableDecisionBundle,
+    ResolvedGroundedCandidate,
+    SemanticCandidateResolver,
     SourceDocument,
 )
 from .models import (
@@ -93,10 +100,14 @@ EVALUATION_ID = "EV-901-PRODUCT-V1"
 class GoldenCapturePreparation:
     profile: CaptureProfile
     profile_artifact: CanonicalArtifact
+    binding_trace: ProfileBindingTrace
     assignment: ProfileAssignment
+    session: CaptureSessionState
     draft_contract: DecisionContract
+    decision_structure: DecisionStructure
     observable: ObservableDecisionBundle
     compiler_candidates: CandidateBundle
+    resolved_precommit_candidates: tuple[ResolvedGroundedCandidate, ...]
     precommit_evidence: tuple[TemporalEvidenceRecord, ...]
     ledger: InMemoryTemporalLedger
     authority_policy: object
@@ -145,7 +156,50 @@ def _draft_contract(*, decision_id: str = "D-104") -> DecisionContract:
         r2_state=HistoricalKnowledgeState.NOT_DURABLY_RECORDED,
         c1_value=CompositionValue.NOT_DURABLY_RECORDED,
     )
-    return contract if decision_id == contract.id else replace(contract, id=decision_id)
+    if decision_id == contract.id:
+        return contract
+    relations = tuple(
+        replace(item, object_id=decision_id if item.object_id == contract.id else item.object_id)
+        for item in contract.historical_relations
+    )
+    return replace(contract, id=decision_id, historical_relations=relations)
+
+
+def _decision_structure(
+    *,
+    contract: DecisionContract,
+    observable: ObservableDecisionBundle,
+) -> DecisionStructure:
+    """Build binder input from typed t0 semantics, never from future events or evaluations."""
+
+    sources = observable.source_map()
+    displays = {
+        "apex_delivery_instability": "Apex delivery performance has been materially unstable",
+        "beacon_reactivation_delay": sources["supplier-record"].content.rstrip("."),
+    }
+    facts = tuple(
+        DecisionFactBinding(
+            entity_id=claim.id,
+            semantic_key=claim.predicate_key,
+            display_text=displays.get(claim.predicate_key, claim.predicate_key.replace("_", " ")),
+        )
+        for claim in contract.claims
+    )
+    relations = tuple(
+        DecisionRelationBinding(
+            entity_id=relation.id,
+            relation_type=relation.relation_type,
+            subject_id=relation.subject_id,
+            object_id=relation.object_id,
+        )
+        for relation in contract.historical_relations
+    )
+    return DecisionStructure(
+        decision_id=contract.id,
+        decision_display="this decision",
+        facts=facts,
+        relations=relations,
+    )
 
 
 def _preauthorize_compiler_evidence(
@@ -153,21 +207,27 @@ def _preauthorize_compiler_evidence(
     ledger: InMemoryTemporalLedger,
     authority_policy,
     observable: ObservableDecisionBundle,
+    contract: DecisionContract,
+    profile: CaptureProfile,
     candidates: CandidateBundle,
-) -> tuple[TemporalEvidenceRecord, ...]:
-    resolver = EvidenceResolver()
+) -> tuple[tuple[ResolvedGroundedCandidate, ...], tuple[TemporalEvidenceRecord, ...]]:
+    semantic_resolver = SemanticCandidateResolver()
+    evidence_resolver = EvidenceResolver()
     entries: list[PendingLedgerEntry] = []
+    resolved_candidates: list[ResolvedGroundedCandidate] = []
     evidence_records: list[TemporalEvidenceRecord] = []
+
     for candidate in candidates.candidates:
-        evidence = resolver.resolve(
+        resolved = semantic_resolver.resolve(candidate=candidate, contract=contract, profile=profile)
+        evidence = evidence_resolver.resolve(
             observable=observable,
-            candidate=candidate,
-            evidence_id=f"PRE-{candidate.entity_id}-PRODUCT-V1",
+            candidate=resolved,
+            evidence_id=f"PRE-{resolved.entity_id}-PRODUCT-V1",
         )
         auth = authority_policy.authorize_candidate(
             evidence=evidence,
             candidate=evidence.candidate_assertions[0],
-            authorization_id=f"PREAUTH-{candidate.entity_id}-PRODUCT-V1",
+            authorization_id=f"PREAUTH-{resolved.entity_id}-PRODUCT-V1",
         )
         entries.extend(
             (
@@ -175,9 +235,12 @@ def _preauthorize_compiler_evidence(
                 PendingLedgerEntry(LedgerEntryKind.AUTHORIZATION, auth),
             )
         )
+        resolved_candidates.append(resolved)
         evidence_records.append(evidence)
-    ledger.append_batch(recorded_at=T0 - timedelta(seconds=3), entries=tuple(entries))
-    return tuple(evidence_records)
+
+    if entries:
+        ledger.append_batch(recorded_at=T0 - timedelta(seconds=3), entries=tuple(entries))
+    return tuple(resolved_candidates), tuple(evidence_records)
 
 
 def _derive_t0_authorized_state(
@@ -209,39 +272,36 @@ def prepare_golden_capture(
     compiler: CandidateCompiler | None = None,
     decision_id: str = "D-104",
 ) -> GoldenCapturePreparation:
-    """Freeze profile, ground t0 evidence, derive authorized state, then select gap."""
+    """Bind t0 structure, derive authority, select and issue the one capture question."""
 
     compiler = compiler or DeterministicGoldenCompiler()
     observable = _golden_observable()
     if decision_id != observable.decision_id:
         observable = replace(observable, decision_id=decision_id)
 
+    draft = _draft_contract(decision_id=decision_id)
+    structure = _decision_structure(contract=draft, observable=observable)
     template = supplier_resilience_capture_template()
-    profile = instantiate_capture_profile(
-        template=template,
-        context=CaptureInstantiationContext(
-            decision_id=decision_id,
-            relation_id="R2",
-            subject_id="F2",
-            subject_semantic_role="SUPPLIER_REACTIVATION_DELAY",
-            subject_display="Beacon's roughly 10-week reactivation delay",
-        ),
-    )
+    profile, binding_trace = ProfileBinder().bind(template=template, structure=structure)
     artifact = make_capture_profile_artifact(profile)
+    if binding_trace.instantiated_profile_hash != artifact.content_hash:
+        raise RuntimeError("binder trace must reproduce exact instantiated profile hash")
+
     assignment = assign_profile(
         session_id=f"CAPTURE-{decision_id}-PRODUCT-V1",
         artifact=artifact,
         assigned_at=T0 - timedelta(seconds=4),
     )
-    draft = _draft_contract(decision_id=decision_id)
 
     ledger = InMemoryTemporalLedger()
     authority_policy = authority_policy_v1()
     candidates = compiler.compile_observable(observable=observable, profile=profile)
-    evidence = _preauthorize_compiler_evidence(
+    resolved_candidates, evidence = _preauthorize_compiler_evidence(
         ledger=ledger,
         authority_policy=authority_policy,
         observable=observable,
+        contract=draft,
+        profile=profile,
         candidates=candidates,
     )
     known_fact_ids, established_relation_ids = _derive_t0_authorized_state(
@@ -258,21 +318,29 @@ def prepare_golden_capture(
         established_relation_ids=established_relation_ids,
         selected_at=T0 - timedelta(seconds=2),
     )
-    if len(gaps) != 1 or gaps[0].slot_id != "R2":
-        raise RuntimeError("golden capture must select exactly the unresolved R2 slot")
+    initial_session = CaptureSessionState(assignment=assignment, budget_total=profile.question_budget)
+    planned = plan_questions(session=initial_session, eligible_relation_gaps=gaps)
+    if planned != (profile.slots[0].slot.id,):
+        raise RuntimeError("golden capture must plan exactly the assigned unresolved relation slot")
+    session = initial_session.issue(planned[0])
+
     if composition_question_eligible(
         composition=draft.composition("C1"),
         established_relation_ids=established_relation_ids,
     ):
-        raise RuntimeError("C1 cannot be eligible before R2 historical role is established")
+        raise RuntimeError("C1 cannot be eligible before surviving historical role is established")
 
     return GoldenCapturePreparation(
         profile=profile,
         profile_artifact=artifact,
+        binding_trace=binding_trace,
         assignment=assignment,
+        session=session,
         draft_contract=draft,
+        decision_structure=structure,
         observable=observable,
         compiler_candidates=candidates,
+        resolved_precommit_candidates=resolved_candidates,
         precommit_evidence=evidence,
         ledger=ledger,
         authority_policy=authority_policy,
@@ -379,6 +447,7 @@ def run_golden_decision(
     profile = preparation.profile
     profile_artifact = preparation.profile_artifact
     assignment = preparation.assignment
+    session = preparation.session
     contract = preparation.draft_contract
     gaps = preparation.critical_gaps
     observable = preparation.observable
@@ -414,28 +483,36 @@ def run_golden_decision(
     if len(response_candidates.candidates) != 1:
         raise ValueError("R2 remains NOT_DURABLY_RECORDED without authorized contemporaneous gap evidence")
 
+    r2_grounded = SemanticCandidateResolver().resolve(
+        candidate=response_candidates.candidates[0],
+        contract=contract,
+        profile=profile,
+    )
     response_observable = ObservableDecisionBundle(contract.id, (response_source,))
-    r2_grounded = response_candidates.candidates[0]
     r2_evidence = EvidenceResolver().resolve(
         observable=response_observable,
         candidate=r2_grounded,
         evidence_id="E-R2-ELICITED-PRODUCT-V1",
     )
+    relation = contract.relation(r2_grounded.entity_id)
     r2_candidate = RelationCandidate(
         id=r2_grounded.candidate_id,
-        relation_type=RelationType.HISTORICAL_SUPPORT,
-        subject_id="F2",
-        object_id=contract.id,
+        relation_type=relation.relation_type,
+        subject_id=relation.subject_id,
+        object_id=relation.object_id,
         evidence_refs=(r2_evidence.id,),
     )
     if not candidate_fills_gap(profile=profile, gap=gaps[0], candidate=r2_candidate):
-        raise RuntimeError("R2 candidate does not fill the pre-assigned slot")
+        raise RuntimeError("response candidate does not fill the pre-assigned slot")
     ledger.append_batch(
         recorded_at=T0 - timedelta(milliseconds=500),
         entries=(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, r2_evidence),),
     )
 
-    precommit_by_entity = {item.candidate_assertions[0].entity_id: item for item in preparation.precommit_evidence}
+    precommit_by_entity = {
+        item.candidate_assertions[0].entity_id: item
+        for item in preparation.precommit_evidence
+    }
     rule_specs = (
         (
             "M1",
@@ -470,7 +547,7 @@ def run_golden_decision(
         ("F1", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F1"], False),
         ("F2", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F2"], False),
         ("R1", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, precommit_by_entity["R1"], False),
-        ("R2", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence, False),
+        (r2_grounded.entity_id, AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence, False),
         ("M1", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M1"], True),
         ("M2", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M2"], True),
         ("RC1", AuthorizedAssertion.REVISIT_RULE, rule_evidence["RC1"], True),
@@ -521,19 +598,25 @@ def run_golden_decision(
         authority_policy=authority_policy,
         target=target,
     )
-    r2 = materialized.relation("R2")
+    r2 = materialized.relation(r2_grounded.entity_id)
     if r2.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED:
-        raise RuntimeError("R2 must become ESTABLISHED only through temporal authority")
+        raise RuntimeError("captured relation must become ESTABLISHED only through temporal authority")
+
     established_after_answer = frozenset(
-        relation.id
-        for relation in materialized.historical_relations
-        if relation.knowledge_state is HistoricalKnowledgeState.ESTABLISHED
+        item.id
+        for item in materialized.historical_relations
+        if item.knowledge_state is HistoricalKnowledgeState.ESTABLISHED
     )
-    if not composition_question_eligible(
+    c1_eligible = composition_question_eligible(
         composition=materialized.composition("C1"),
         established_relation_ids=established_after_answer,
-    ):
-        raise RuntimeError("C1 should become structurally eligible only after R2 is established")
+    )
+    if not c1_eligible:
+        raise RuntimeError("C1 should become structurally eligible only after captured role is established")
+    if session.remaining_budget != 0:
+        raise RuntimeError("issuing the prospective question must consume the frozen interaction budget")
+    if plan_questions(session=session, eligible_composition_ids=("C1",)) != ():
+        raise RuntimeError("capture planner must not emit C1 after question budget is exhausted")
 
     event_policy = event_policy_v1()
     event_policies = {(event_policy.version, event_policy.policy_hash): event_policy}
@@ -643,10 +726,10 @@ def run_golden_decision(
             evidence_refs=r2_candidate.evidence_refs,
         ),
         r2_trace=RelationTraceView(
-            entity_id="R2",
+            entity_id=r2.id,
             knowledge_state=r2.knowledge_state.value,
             evidence_ids=r2.evidence_refs,
-            authorization_ids=(auth_ids["R2"],),
+            authorization_ids=(auth_ids[r2.id],),
             commit_id=commit.commit_id,
             commit_batch_seq=commit.commit_cutoff_seq,
         ),
