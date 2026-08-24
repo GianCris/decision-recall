@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+import re
 from typing import FrozenSet, Tuple
 
 from ..domain import CompositionState, RelationCandidate, RelationSlot, RelationType
@@ -50,7 +51,11 @@ class DecisionRelationBinding:
 
 @dataclass(frozen=True)
 class DecisionStructure:
-    """Typed t0 decision structure available independently of future events."""
+    """Typed t0 decision structure available independently of future events.
+
+    `relations` contains already-existing structural relations only. A capture slot
+    does not need to exist here; ProfileBinder may deterministically originate it.
+    """
 
     decision_id: str
     decision_display: str
@@ -217,8 +222,48 @@ def instantiate_capture_profile(
     )
 
 
+def _deterministic_relation_slot_id(
+    *,
+    structure: DecisionStructure,
+    slot_template: CaptureSlotTemplate,
+    subject: DecisionFactBinding,
+) -> str:
+    """Allocate stable slot identity from t0 structure, never a prewritten target relation.
+
+    V1 preserves compact R<n> ids when the existing structural relation namespace is
+    numeric (e.g. R1 -> generated R2). Otherwise it falls back to a semantic hash id.
+    """
+
+    existing = {item.entity_id for item in structure.relations}
+    numeric = []
+    for entity_id in existing:
+        match = re.fullmatch(r"R(\d+)", entity_id)
+        if match:
+            numeric.append(int(match.group(1)))
+    if numeric:
+        candidate_number = max(numeric) + 1
+        while f"R{candidate_number}" in existing:
+            candidate_number += 1
+        return f"R{candidate_number}"
+
+    seed = "|".join(
+        (
+            slot_template.relation_type.value,
+            slot_template.semantic_role,
+            subject.semantic_key,
+            subject.entity_id,
+            structure.decision_id,
+        )
+    )
+    digest = sha256(seed.encode("utf-8")).hexdigest()[:12].upper()
+    candidate = f"RS-{digest}"
+    if candidate in existing:
+        raise ValueError("deterministic capture slot id collides with existing relation")
+    return candidate
+
+
 class ProfileBinder:
-    """Bind reusable capture policy to typed t0 structure without golden entity IDs."""
+    """Bind reusable capture policy to typed t0 structure without prewritten target slots."""
 
     version = BINDER_V1
 
@@ -230,6 +275,8 @@ class ProfileBinder:
     ) -> tuple[CaptureProfile, ProfileBindingTrace]:
         structure_hash = canonical_hash(structure)
         contexts: list[CaptureInstantiationContext] = []
+        allocated_ids: set[str] = set()
+
         for slot_template in template.slots:
             facts = tuple(
                 fact for fact in structure.facts
@@ -238,19 +285,31 @@ class ProfileBinder:
             if len(facts) != 1:
                 raise ValueError("profile binder requires exactly one structural fact for semantic role")
             fact = facts[0]
-            relations = tuple(
+
+            existing_matches = tuple(
                 relation for relation in structure.relations
                 if relation.relation_type is slot_template.relation_type
                 and relation.subject_id == fact.entity_id
                 and relation.object_id == structure.decision_id
             )
-            if len(relations) != 1:
-                raise ValueError("profile binder requires exactly one structural relation slot")
-            relation = relations[0]
+            if len(existing_matches) > 1:
+                raise ValueError("profile binder found ambiguous existing structural relation")
+            if existing_matches:
+                relation_id = existing_matches[0].entity_id
+            else:
+                relation_id = _deterministic_relation_slot_id(
+                    structure=structure,
+                    slot_template=slot_template,
+                    subject=fact,
+                )
+            if relation_id in allocated_ids:
+                raise ValueError("profile binder generated duplicate capture slot id")
+            allocated_ids.add(relation_id)
+
             contexts.append(
                 CaptureInstantiationContext(
                     decision_id=structure.decision_id,
-                    relation_id=relation.entity_id,
+                    relation_id=relation_id,
                     subject_id=fact.entity_id,
                     subject_semantic_role=fact.semantic_key,
                     subject_display=fact.display_text,
