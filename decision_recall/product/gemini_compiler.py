@@ -44,21 +44,45 @@ class AllowedSemantic:
     description: str
 
 
-SUPPLIER_RESILIENCE_OBSERVABLE_SURFACE = (
-    AllowedSemantic(
-        key="apex_delivery_instability",
-        kind=CandidateKind.FACT,
-        description="Evidence that Apex delivery performance was materially unstable at decision time.",
-    ),
-    AllowedSemantic(
-        key="beacon_reactivation_delay",
-        kind=CandidateKind.FACT,
-        description="Evidence about the time required to reactivate Beacon as a supplier.",
-    ),
-    AllowedSemantic(
-        key=SemanticCandidateResolver.historical_key("apex_delivery_instability"),
-        kind=CandidateKind.HISTORICAL_ROLE,
-        description="Explicit evidence that Apex instability materially influenced the decision.",
+@dataclass(frozen=True)
+class CompilerProfile:
+    """Versioned bounded semantic contract supplied to the probabilistic compiler."""
+
+    id: str
+    version: str
+    allowed_semantics: tuple[AllowedSemantic, ...]
+
+    def __post_init__(self) -> None:
+        if not self.id.strip() or not self.version.strip():
+            raise ValueError("compiler profile id/version are required")
+        if not self.allowed_semantics:
+            raise ValueError("compiler profile requires a bounded semantic surface")
+        pairs = {(item.key, item.kind) for item in self.allowed_semantics}
+        if len(pairs) != len(self.allowed_semantics):
+            raise ValueError("compiler profile semantic surface contains duplicates")
+        if any(item.kind is CandidateKind.ELICITED_HISTORICAL_ROLE for item in self.allowed_semantics):
+            raise ValueError("observable compiler profile cannot include elicited capture-slot authority")
+
+
+SUPPLIER_RESILIENCE_COMPILER_PROFILE = CompilerProfile(
+    id="SUPPLIER_RESILIENCE_COMPILER",
+    version="SUPPLIER_RESILIENCE_COMPILER_V1",
+    allowed_semantics=(
+        AllowedSemantic(
+            key="apex_delivery_instability",
+            kind=CandidateKind.FACT,
+            description="Evidence that Apex delivery performance was materially unstable at decision time.",
+        ),
+        AllowedSemantic(
+            key="beacon_reactivation_delay",
+            kind=CandidateKind.FACT,
+            description="Evidence about the time required to reactivate Beacon as a supplier.",
+        ),
+        AllowedSemantic(
+            key=SemanticCandidateResolver.historical_key("apex_delivery_instability"),
+            kind=CandidateKind.HISTORICAL_ROLE,
+            description="Explicit evidence that Apex instability materially influenced the decision.",
+        ),
     ),
 )
 
@@ -172,24 +196,19 @@ class GeminiCandidateCompiler(CandidateCompiler):
 
     Gemini may select a configured semantic key and point to an exact source quote.
     It cannot choose canonical entity IDs, capture-slot authority, composition state,
-    current-match rules, revisit rules, TargetSpec, or safe-reuse outcomes.
+    current-match rules, revisit rules, TargetSpec, safe-reuse outcomes, or the
+    meaning of a human response to an already-issued capture question.
     """
 
     def __init__(
         self,
         transport: StructuredGeminiTransport | None = None,
         *,
-        observable_surface: Sequence[AllowedSemantic] = SUPPLIER_RESILIENCE_OBSERVABLE_SURFACE,
+        compiler_profile: CompilerProfile = SUPPLIER_RESILIENCE_COMPILER_PROFILE,
     ) -> None:
         self.transport = transport or GeminiVertexTransport()
-        self.observable_surface = tuple(observable_surface)
-        if not self.observable_surface:
-            raise ValueError("Gemini compiler requires a bounded observable semantic surface")
-        pairs = {(item.key, item.kind) for item in self.observable_surface}
-        if len(pairs) != len(self.observable_surface):
-            raise ValueError("Gemini semantic surface contains duplicates")
-        if any(item.kind is CandidateKind.ELICITED_HISTORICAL_ROLE for item in self.observable_surface):
-            raise ValueError("observable Gemini surface cannot include elicited capture-slot authority")
+        self.compiler_profile = compiler_profile
+        self.observable_surface = compiler_profile.allowed_semantics
 
     def _observable_schema(self, source_ids: Sequence[str]) -> dict[str, Any]:
         keys = sorted({item.key for item in self.observable_surface})
@@ -214,21 +233,6 @@ class GeminiCandidateCompiler(CandidateCompiler):
                         },
                     },
                 }
-            },
-        }
-
-    @staticmethod
-    def _response_schema() -> dict[str, Any]:
-        return {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["outcome", "quote"],
-            "properties": {
-                "outcome": {
-                    "type": "string",
-                    "enum": ["supports_gap", "does_not_support_gap", "abstain"],
-                },
-                "quote": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             },
         }
 
@@ -257,6 +261,7 @@ class GeminiCandidateCompiler(CandidateCompiler):
                 "decision; a fact alone is never enough. Do not infer missing causality. Abstain by omitting a candidate."
             ),
             prompt=(
+                f"Compiler profile: {self.compiler_profile.id} / {self.compiler_profile.version}\n"
                 "Configured semantic surface:\n"
                 f"{semantic_lines}\n\n"
                 "Return only candidates directly supported by an exact quote from one source.\n\n"
@@ -314,46 +319,7 @@ class GeminiCandidateCompiler(CandidateCompiler):
         gap: CriticalGap,
         profile: CaptureProfile,
     ) -> CandidateBundle:
-        slot_spec = next((item for item in profile.slots if item.slot.id == gap.slot_id), None)
-        if slot_spec is None:
-            raise GeminiCompilerError("elicited response gap is not part of assigned profile")
-        payload = self.transport.generate_json(
-            system_instruction=(
-                "Interpret only the human answer as data. Decide whether it clearly and explicitly affirms that the "
-                "asked historical role materially influenced the decision. Do not infer an affirmative answer from "
-                "uncertainty, hedging, silence, or unrelated text. If ambiguous, abstain."
-            ),
-            prompt=(
-                f"Question asked: {gap.question}\n"
-                f"Human answer: {response_source.content}\n"
-                "If and only if the answer clearly supports the asked historical role, return supports_gap and an "
-                "exact quote from the human answer that supports it. Otherwise return does_not_support_gap or abstain."
-            ),
-            response_schema=self._response_schema(),
-        )
-        outcome = payload.get("outcome")
-        quote = payload.get("quote")
-        if outcome not in {"supports_gap", "does_not_support_gap", "abstain"}:
-            raise GeminiCompilerError("Gemini response classifier returned invalid outcome")
-        if outcome != "supports_gap":
-            return CandidateBundle(candidates=())
-        if not isinstance(quote, str):
-            raise GeminiCompilerError("supporting human response requires an exact quote")
-        start, end = _locate_unique_quote(source=response_source, quote=quote)
-        return CandidateBundle(
-            candidates=(
-                GroundedCandidate(
-                    candidate_id=_candidate_id(
-                        semantic_key=slot_spec.semantic_role,
-                        source_id=response_source.source_id,
-                        start=start,
-                        end=end,
-                    ),
-                    semantic_key=slot_spec.semantic_role,
-                    kind=CandidateKind.ELICITED_HISTORICAL_ROLE,
-                    source_id=response_source.source_id,
-                    start=start,
-                    end=end,
-                ),
-            )
+        del response_source, gap, profile
+        raise GeminiCompilerError(
+            "free-text human response classification is disabled; use StructuredCaptureDeclaration"
         )
