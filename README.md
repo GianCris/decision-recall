@@ -11,7 +11,7 @@ This branch contains the deterministic Decision Recall core plus the earlier DR-
 - M1 / M2 / M2.1: frozen
 - Product Checkpoint 1: frozen
 - Product Checkpoint 2 (Gemini compiler boundary + credentialed live 9/9): frozen
-- Visible Winner Slice: active
+- Visible Winner Slice: **VWS-0.5 static comprehension gate active**
 - Target hackathon category: **Collaborative Partner**
 
 Judge-comprehension contract:
@@ -20,13 +20,15 @@ Judge-comprehension contract:
 docs/VWS_0_JUDGE_COMPREHENSION_CONTRACT.md
 ```
 
-Static VWS-0.5 prototype for cold-viewer testing:
+Static five-frame VWS-0.5 prototype:
 
 ```text
 prototypes/vws-05/index.html
 ```
 
-The prototype is explicitly not the hackathon Proof-of-Action demo. The final submission path must execute live, run the backend on Google Cloud infrastructure (minimum target: Cloud Run), and show Google Cloud deployment evidence in the continuous demo video.
+The static prototype exists only to test whether a cold viewer understands the mechanism before frontend investment. It is explicitly **not** the hackathon Proof-of-Action demo.
+
+Before submission, the real judge-facing backend must be hosted on explicit Google Cloud infrastructure (minimum target: Cloud Run), the repository must include architecture/spin-up documentation, and the submitted video must show a continuous unedited live execution plus visible Google Cloud deployment proof.
 
 ## Core architecture
 
