@@ -148,21 +148,19 @@ def make_structured_capture_declaration(
 def declaration_to_evidence(
     *,
     declaration: StructuredCaptureDeclaration,
+    session: CaptureSessionState,
     gap: CriticalGap,
     evidence_id: str,
-    session: CaptureSessionState | None = None,
 ) -> TemporalEvidenceRecord:
-    # The current in-process winner loop creates the frozen declaration directly
-    # from its trusted session. API/persistence callers must supply the session so
-    # deserialized declarations are re-bound against authoritative assignment state.
-    if session is not None:
-        assignment = session.assignment
-        if declaration.capture_session_id != assignment.session_id:
-            raise ValueError("structured declaration is bound to a different capture session")
-        if declaration.profile_artifact_id != assignment.artifact_id or declaration.profile_hash != assignment.profile_hash:
-            raise ValueError("structured declaration profile binding does not match the assigned profile")
-        if gap.slot_id not in session.questions_issued:
-            raise ValueError("structured declaration references an unissued capture gap")
+    """Rebind every declaration to authoritative capture state before evidence exists."""
+
+    assignment = session.assignment
+    if declaration.capture_session_id != assignment.session_id:
+        raise ValueError("structured declaration is bound to a different capture session")
+    if declaration.profile_artifact_id != assignment.artifact_id or declaration.profile_hash != assignment.profile_hash:
+        raise ValueError("structured declaration profile binding does not match the assigned profile")
+    if gap.slot_id not in session.questions_issued:
+        raise ValueError("structured declaration references an unissued capture gap")
     if declaration.gap_id != gap.slot_id:
         raise ValueError("structured declaration is bound to a different capture gap")
     if declaration.question_hash != capture_question_hash(gap.question):
