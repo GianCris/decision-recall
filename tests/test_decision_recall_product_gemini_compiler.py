@@ -254,6 +254,7 @@ class GeminiCompilerTests(unittest.TestCase):
 
         evidence = declaration_to_evidence(
             declaration=declaration,
+            session=preparation.session,
             gap=gap,
             evidence_id="E-STRUCTURED-YES",
         )
@@ -280,6 +281,7 @@ class GeminiCompilerTests(unittest.TestCase):
         )
         unresolved_evidence = declaration_to_evidence(
             declaration=not_sure,
+            session=preparation.session,
             gap=gap,
             evidence_id="E-STRUCTURED-NOT-SURE",
         )
@@ -313,6 +315,7 @@ class GeminiCompilerTests(unittest.TestCase):
         )
         no_evidence = declaration_to_evidence(
             declaration=explicit_no,
+            session=preparation.session,
             gap=gap,
             evidence_id="E-STRUCTURED-NO",
         )
@@ -333,6 +336,7 @@ class GeminiCompilerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "question binding"):
             declaration_to_evidence(
                 declaration=declaration,
+                session=preparation.session,
                 gap=tampered_gap,
                 evidence_id="E-TAMPERED",
             )
