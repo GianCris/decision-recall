@@ -41,6 +41,7 @@ class StructuredCaptureDeclaration:
     profile_hash: str
     gap_id: str
     question_hash: str
+    gap_selected_at: datetime
     answer: CaptureAnswer
     answered_at: datetime
     provenance_type: ProvenanceType
@@ -57,8 +58,11 @@ class StructuredCaptureDeclaration:
         )
         if any(not item.strip() for item in required):
             raise ValueError("structured capture declaration binding fields are required")
-        if self.answered_at.tzinfo is None or self.answered_at.utcoffset() is None:
-            raise ValueError("structured capture declaration answered_at must be timezone-aware")
+        for value, name in ((self.gap_selected_at, "gap_selected_at"), (self.answered_at, "answered_at")):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError(f"structured capture declaration {name} must be timezone-aware")
+        if self.answered_at < self.gap_selected_at:
+            raise ValueError("structured capture declaration cannot predate the selected gap")
         if self.provenance_type is not ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION:
             raise ValueError("structured capture declaration requires elicited contemporaneous provenance")
 
@@ -76,6 +80,7 @@ def _declaration_payload(
     profile_hash: str,
     gap_id: str,
     question_hash: str,
+    gap_selected_at: datetime,
     answer: CaptureAnswer,
     answered_at: datetime,
     optional_note: str,
@@ -86,10 +91,16 @@ def _declaration_payload(
         "profile_hash": profile_hash,
         "gap_id": gap_id,
         "question_hash": question_hash,
+        "gap_selected_at": gap_selected_at.isoformat(),
         "answer": answer.value,
         "answered_at": answered_at.isoformat(),
         "optional_note": optional_note,
     }
+
+
+def _declaration_id(*, gap_id: str, payload: dict[str, str]) -> str:
+    digest = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return f"CAPTURE-DECL:{gap_id}:{digest[:16]}"
 
 
 def make_structured_capture_declaration(
@@ -114,18 +125,19 @@ def make_structured_capture_declaration(
         profile_hash=session.assignment.profile_hash,
         gap_id=gap.slot_id,
         question_hash=qhash,
+        gap_selected_at=gap.selected_at,
         answer=answer,
         answered_at=answered_at,
         optional_note=optional_note,
     )
-    digest = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return StructuredCaptureDeclaration(
-        id=f"CAPTURE-DECL:{gap.slot_id}:{digest[:16]}",
+        id=_declaration_id(gap_id=gap.slot_id, payload=payload),
         capture_session_id=session.assignment.session_id,
         profile_artifact_id=session.assignment.artifact_id,
         profile_hash=session.assignment.profile_hash,
         gap_id=gap.slot_id,
         question_hash=qhash,
+        gap_selected_at=gap.selected_at,
         answer=answer,
         answered_at=answered_at,
         provenance_type=ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
@@ -136,13 +148,21 @@ def make_structured_capture_declaration(
 def declaration_to_evidence(
     *,
     declaration: StructuredCaptureDeclaration,
+    session: CaptureSessionState,
     gap: CriticalGap,
     evidence_id: str,
 ) -> TemporalEvidenceRecord:
-    if declaration.gap_id != gap.slot_id:
-        raise ValueError("structured declaration is bound to a different capture gap")
+    assignment = session.assignment
+    if declaration.capture_session_id != assignment.session_id:
+        raise ValueError("structured declaration is bound to a different capture session")
+    if declaration.profile_artifact_id != assignment.artifact_id or declaration.profile_hash != assignment.profile_hash:
+        raise ValueError("structured declaration profile binding does not match the assigned profile")
+    if declaration.gap_id != gap.slot_id or gap.slot_id not in session.questions_issued:
+        raise ValueError("structured declaration is bound to a different or unissued capture gap")
     if declaration.question_hash != capture_question_hash(gap.question):
         raise ValueError("structured declaration question binding does not match the issued question")
+    if declaration.gap_selected_at != gap.selected_at:
+        raise ValueError("structured declaration gap timestamp binding does not match the issued gap")
 
     payload = _declaration_payload(
         capture_session_id=declaration.capture_session_id,
@@ -150,10 +170,13 @@ def declaration_to_evidence(
         profile_hash=declaration.profile_hash,
         gap_id=declaration.gap_id,
         question_hash=declaration.question_hash,
+        gap_selected_at=declaration.gap_selected_at,
         answer=declaration.answer,
         answered_at=declaration.answered_at,
         optional_note=declaration.optional_note,
     )
+    if declaration.id != _declaration_id(gap_id=declaration.gap_id, payload=payload):
+        raise ValueError("structured declaration content does not reproduce its declaration id")
     content = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     if declaration.answer is CaptureAnswer.YES:
