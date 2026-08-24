@@ -45,17 +45,29 @@ from ..temporal import (
     TemporalReference,
     authority_policy_v1,
     event_policy_v1,
+    recorded_historical_view,
     source_hash,
 )
 from .capture import (
+    CaptureInstantiationContext,
     CaptureProfile,
     CriticalGap,
     ProfileAssignment,
     assign_profile,
     candidate_fills_gap,
+    composition_question_eligible,
+    instantiate_capture_profile,
     make_capture_profile_artifact,
     select_critical_gaps,
-    supplier_resilience_capture_profile,
+    supplier_resilience_capture_template,
+)
+from .compiler import (
+    CandidateBundle,
+    CandidateCompiler,
+    DeterministicGoldenCompiler,
+    EvidenceResolver,
+    ObservableDecisionBundle,
+    SourceDocument,
 )
 from .models import (
     CandidateView,
@@ -83,25 +95,253 @@ class GoldenCapturePreparation:
     profile_artifact: CanonicalArtifact
     assignment: ProfileAssignment
     draft_contract: DecisionContract
+    observable: ObservableDecisionBundle
+    compiler_candidates: CandidateBundle
+    precommit_evidence: tuple[TemporalEvidenceRecord, ...]
+    ledger: InMemoryTemporalLedger
+    authority_policy: object
+    known_fact_ids: frozenset[str]
+    established_relation_ids: frozenset[str]
     critical_gaps: tuple[CriticalGap, ...]
 
 
-def _evidence(
-    evidence_id: str,
+def _golden_observable() -> ObservableDecisionBundle:
+    return ObservableDecisionBundle(
+        decision_id="D-104",
+        sources=(
+            SourceDocument(
+                source_id="decision-note",
+                content=(
+                    "Decision D-104: keep Apex and Beacon active for six months. "
+                    "Apex delivery performance has been materially unstable. "
+                    "Apex instability materially influenced the decision."
+                ),
+                provenance_type=ProvenanceType.CONTEMPORANEOUS_RECORD,
+                observed_at=T0 - timedelta(minutes=5),
+            ),
+            SourceDocument(
+                source_id="supplier-record",
+                content="Beacon requires roughly 10 weeks to reactivate.",
+                provenance_type=ProvenanceType.CONTEMPORANEOUS_RECORD,
+                observed_at=T0 - timedelta(minutes=5),
+            ),
+            SourceDocument(
+                source_id="policy-record",
+                content=(
+                    "Current supplier policy: Apex is considered stable after on-time delivery "
+                    "reaches 97% for at least 30 days. Beacon remains reaction capacity while "
+                    "reactivation is at least 70 days. Review supplier redundancy once Apex "
+                    "reaches 97% for at least 30 days."
+                ),
+                provenance_type=ProvenanceType.CONTEMPORANEOUS_RECORD,
+                observed_at=T0 - timedelta(minutes=5),
+            ),
+        ),
+    )
+
+
+def _draft_contract(*, decision_id: str = "D-104") -> DecisionContract:
+    contract = supplier_resilience_contract(
+        r2_state=HistoricalKnowledgeState.NOT_DURABLY_RECORDED,
+        c1_value=CompositionValue.NOT_DURABLY_RECORDED,
+    )
+    return contract if decision_id == contract.id else replace(contract, id=decision_id)
+
+
+def _preauthorize_compiler_evidence(
     *,
+    ledger: InMemoryTemporalLedger,
+    authority_policy,
+    observable: ObservableDecisionBundle,
+    candidates: CandidateBundle,
+) -> tuple[TemporalEvidenceRecord, ...]:
+    resolver = EvidenceResolver()
+    entries: list[PendingLedgerEntry] = []
+    evidence_records: list[TemporalEvidenceRecord] = []
+    for candidate in candidates.candidates:
+        evidence = resolver.resolve(
+            observable=observable,
+            candidate=candidate,
+            evidence_id=f"PRE-{candidate.entity_id}-PRODUCT-V1",
+        )
+        auth = authority_policy.authorize_candidate(
+            evidence=evidence,
+            candidate=evidence.candidate_assertions[0],
+            authorization_id=f"PREAUTH-{candidate.entity_id}-PRODUCT-V1",
+        )
+        entries.extend(
+            (
+                PendingLedgerEntry(LedgerEntryKind.EVIDENCE, evidence),
+                PendingLedgerEntry(LedgerEntryKind.AUTHORIZATION, auth),
+            )
+        )
+        evidence_records.append(evidence)
+    ledger.append_batch(recorded_at=T0 - timedelta(seconds=3), entries=tuple(entries))
+    return tuple(evidence_records)
+
+
+def _derive_t0_authorized_state(
+    *,
+    ledger: InMemoryTemporalLedger,
+    authority_policy,
+    contract: DecisionContract,
+) -> tuple[frozenset[str], frozenset[str]]:
+    view = recorded_historical_view(
+        ledger,
+        cutoff_seq=ledger.head_seq,
+        policies={(authority_policy.version, authority_policy.policy_hash): authority_policy},
+    )
+    known_facts = frozenset(
+        claim.id
+        for claim in contract.claims
+        if AuthorizedAssertion.ESTABLISHED_FACT in view.assertions_for(claim.id)
+    )
+    established_relations = frozenset(
+        relation.id
+        for relation in contract.historical_relations
+        if AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE in view.assertions_for(relation.id)
+    )
+    return known_facts, established_relations
+
+
+def prepare_golden_capture(
+    *,
+    compiler: CandidateCompiler | None = None,
+    decision_id: str = "D-104",
+) -> GoldenCapturePreparation:
+    """Freeze profile, ground t0 evidence, derive authorized state, then select gap."""
+
+    compiler = compiler or DeterministicGoldenCompiler()
+    observable = _golden_observable()
+    if decision_id != observable.decision_id:
+        observable = replace(observable, decision_id=decision_id)
+
+    template = supplier_resilience_capture_template()
+    profile = instantiate_capture_profile(
+        template=template,
+        context=CaptureInstantiationContext(
+            decision_id=decision_id,
+            relation_id="R2",
+            subject_id="F2",
+            subject_predicate_key="beacon_reactivation_delay",
+            subject_display="Beacon's roughly 10-week reactivation delay",
+        ),
+    )
+    artifact = make_capture_profile_artifact(profile)
+    assignment = assign_profile(
+        session_id=f"CAPTURE-{decision_id}-PRODUCT-V1",
+        artifact=artifact,
+        assigned_at=T0 - timedelta(seconds=4),
+    )
+    draft = _draft_contract(decision_id=decision_id)
+
+    ledger = InMemoryTemporalLedger()
+    authority_policy = authority_policy_v1()
+    candidates = compiler.compile_observable(observable=observable, profile=profile)
+    evidence = _preauthorize_compiler_evidence(
+        ledger=ledger,
+        authority_policy=authority_policy,
+        observable=observable,
+        candidates=candidates,
+    )
+    known_fact_ids, established_relation_ids = _derive_t0_authorized_state(
+        ledger=ledger,
+        authority_policy=authority_policy,
+        contract=draft,
+    )
+
+    gaps = select_critical_gaps(
+        profile=profile,
+        assignment=assignment,
+        decision_id=draft.id,
+        known_fact_ids=known_fact_ids,
+        established_relation_ids=established_relation_ids,
+        selected_at=T0 - timedelta(seconds=2),
+    )
+    if len(gaps) != 1 or gaps[0].slot_id != "R2":
+        raise RuntimeError("golden capture must select exactly the unresolved R2 slot")
+    if composition_question_eligible(
+        composition=draft.composition("C1"),
+        established_relation_ids=established_relation_ids,
+    ):
+        raise RuntimeError("C1 cannot be eligible before R2 historical role is established")
+
+    return GoldenCapturePreparation(
+        profile=profile,
+        profile_artifact=artifact,
+        assignment=assignment,
+        draft_contract=draft,
+        observable=observable,
+        compiler_candidates=candidates,
+        precommit_evidence=evidence,
+        ledger=ledger,
+        authority_policy=authority_policy,
+        known_fact_ids=known_fact_ids,
+        established_relation_ids=established_relation_ids,
+        critical_gaps=gaps,
+    )
+
+
+def _bound_authorization(
+    *,
+    registry: M21Registry,
+    authority_policy,
+    contract: DecisionContract,
+    contract_artifact: CanonicalArtifact,
+    evidence: TemporalEvidenceRecord,
     entity_id: str,
     assertion: AuthorizedAssertion,
-    content: str,
-    provenance: ProvenanceType = ProvenanceType.CONTEMPORANEOUS_RECORD,
+):
+    raw = authority_policy.authorize_candidate(
+        evidence=evidence,
+        candidate=evidence.candidate_assertions[0],
+        authorization_id=f"AUTH-{entity_id}-{assertion.value}-PRODUCT-V1",
+    )
+    bound = replace(
+        raw,
+        contract_artifact_id=contract_artifact.artifact_id,
+        entity_definition_hash=entity_definition_hash(contract, entity_id),
+        scope=AuthorizationScope.COMMIT_TIME.value,
+        scope_ref=COMMIT_ID,
+    )
+    registry.add_authorization(
+        ScopedAuthorization(
+            authorization_id=bound.id,
+            contract_artifact_id=contract_artifact.artifact_id,
+            entity_id=entity_id,
+            entity_definition_hash=bound.entity_definition_hash,
+            authorized_assertion=assertion,
+            evidence_id=evidence.id,
+            policy_version=bound.policy_version,
+            policy_hash=bound.policy_hash,
+            scope=AuthorizationScope.COMMIT_TIME,
+            scope_ref=COMMIT_ID,
+        )
+    )
+    return bound
+
+
+def _configured_rule_evidence(
+    *,
+    observable: ObservableDecisionBundle,
+    evidence_id: str,
+    entity_id: str,
+    assertion: AuthorizedAssertion,
+    quote: str,
 ) -> TemporalEvidenceRecord:
+    source = observable.source_map()["policy-record"]
+    start = source.content.find(quote)
+    if start < 0:
+        raise RuntimeError("configured rule source quote is absent from observable policy")
+    exact = source.content[start:start + len(quote)]
     return TemporalEvidenceRecord(
         id=evidence_id,
-        content=content,
-        source_id=f"source-{evidence_id}",
-        source_span="observable decision-time artifact",
-        source_content_hash=source_hash(content),
-        provenance_type=provenance,
-        temporal_reference=TemporalReference.point(T0),
+        content=exact,
+        source_id=source.source_id,
+        source_span=f"chars:{start}-{start + len(quote)}",
+        source_content_hash=source_hash(exact),
+        provenance_type=source.provenance_type,
+        temporal_reference=TemporalReference.point(source.observed_at),
         candidate_assertions=(CandidateAssertion(entity_id, assertion),),
     )
 
@@ -123,110 +363,30 @@ def _world_evidence(
         source_content_hash=source_hash(text),
         provenance_type=ProvenanceType.CONTEMPORANEOUS_RECORD,
         temporal_reference=TemporalReference.point(T1),
-        observations=(
-            NumericObservation(
-                metric_key=metric_key,
-                value=value,
-                unit=unit,
-                window_days=window_days,
-            ),
-        ),
+        observations=(NumericObservation(metric_key, value, unit=unit, window_days=window_days),),
     )
 
 
-def _draft_contract() -> DecisionContract:
-    # Entity/schema draft only. It deliberately does not claim that R2 was true.
-    return supplier_resilience_contract(
-        r2_state=HistoricalKnowledgeState.NOT_DURABLY_RECORDED,
-        c1_value=CompositionValue.NOT_DURABLY_RECORDED,
-    )
-
-
-def prepare_golden_capture() -> GoldenCapturePreparation:
-    """Freeze the t0 profile assignment before gap selection or any t1 data."""
-    profile = supplier_resilience_capture_profile()
-    artifact = make_capture_profile_artifact(profile)
-    assignment = assign_profile(
-        session_id="CAPTURE-D104-PRODUCT-V1",
-        artifact=artifact,
-        assigned_at=T0 - timedelta(seconds=2),
-    )
-    draft = _draft_contract()
-    gaps = select_critical_gaps(
-        profile=profile,
-        assignment=assignment,
-        decision_id=draft.id,
-        known_fact_ids=frozenset({"F1", "F2"}),
-        established_relation_ids=frozenset({"R1"}),
-        selected_at=T0 - timedelta(seconds=1),
-    )
-    if len(gaps) != 1 or gaps[0].slot_id != "R2":
-        raise RuntimeError("golden capture must select exactly R2")
-    return GoldenCapturePreparation(profile, artifact, assignment, draft, gaps)
-
-
-def _append_bound_authorization(
+def run_golden_decision(
     *,
-    registry: M21Registry,
-    entries: list[PendingLedgerEntry],
-    authority_policy,
-    contract: DecisionContract,
-    contract_artifact: CanonicalArtifact,
-    evidence: TemporalEvidenceRecord,
-    entity_id: str,
-    assertion: AuthorizedAssertion,
-) -> str:
-    raw = authority_policy.authorize_candidate(
-        evidence=evidence,
-        candidate=evidence.candidate_assertions[0],
-        authorization_id=f"AUTH-{entity_id}-{assertion.value}-PRODUCT-V1",
-    )
-    bound = replace(
-        raw,
-        contract_artifact_id=contract_artifact.artifact_id,
-        entity_definition_hash=entity_definition_hash(contract, entity_id),
-        scope=AuthorizationScope.COMMIT_TIME.value,
-        scope_ref=COMMIT_ID,
-    )
-    entries.extend(
-        (
-            PendingLedgerEntry(LedgerEntryKind.EVIDENCE, evidence),
-            PendingLedgerEntry(LedgerEntryKind.AUTHORIZATION, bound),
-        )
-    )
-    registry.add_authorization(
-        ScopedAuthorization(
-            authorization_id=bound.id,
-            contract_artifact_id=contract_artifact.artifact_id,
-            entity_id=entity_id,
-            entity_definition_hash=bound.entity_definition_hash,
-            authorized_assertion=assertion,
-            evidence_id=evidence.id,
-            policy_version=bound.policy_version,
-            policy_hash=bound.policy_hash,
-            scope=AuthorizationScope.COMMIT_TIME,
-            scope_ref=COMMIT_ID,
-        )
-    )
-    return bound.id
+    answer_r2: bool = True,
+    compiler: CandidateCompiler | None = None,
+) -> GoldenLoopResult:
+    """Trust-hardened winner loop: grounded t0 -> gap -> answer -> strict replay -> C1."""
 
-
-def run_golden_decision(*, answer_r2: bool = True) -> GoldenLoopResult:
-    """Checkpoint 1: t0 capture -> authority -> commit -> t1 strict replay -> C1."""
-    registry = M21Registry()
-    ledger = InMemoryTemporalLedger()
-    authority_policy = authority_policy_v1()
-    event_policy = event_policy_v1()
-    event_policies = {(event_policy.version, event_policy.policy_hash): event_policy}
-
-    preparation = prepare_golden_capture()
+    compiler = compiler or DeterministicGoldenCompiler()
+    preparation = prepare_golden_capture(compiler=compiler)
     profile = preparation.profile
     profile_artifact = preparation.profile_artifact
     assignment = preparation.assignment
     contract = preparation.draft_contract
     gaps = preparation.critical_gaps
-    registry.add_artifact(profile_artifact)
+    observable = preparation.observable
+    ledger = preparation.ledger
+    authority_policy = preparation.authority_policy
 
+    registry = M21Registry()
+    registry.add_artifact(profile_artifact)
     contract_artifact = make_contract_artifact(contract, version="1")
     target = safe_reuse_target_v1()
     target_artifact = make_target_artifact(target)
@@ -235,55 +395,91 @@ def run_golden_decision(*, answer_r2: bool = True) -> GoldenLoopResult:
     for artifact in (contract_artifact, target_artifact, schema_artifact):
         registry.add_artifact(artifact)
 
-    if not answer_r2:
-        raise ValueError("R2 remains NOT_DURABLY_RECORDED without contemporaneous gap evidence")
-
-    r2_answer = (
-        "Yes. Beacon's roughly 10-week reactivation delay materially influenced "
-        "the decision to keep Beacon active as reaction capacity."
+    raw_response = (
+        "Yes. Beacon's roughly 10-week reactivation delay materially influenced the decision."
+        if answer_r2
+        else "No answer provided."
     )
-    r2_evidence = _evidence(
-        "E-R2-ELICITED-PRODUCT-V1",
-        entity_id="R2",
-        assertion=AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE,
-        content=r2_answer,
-        provenance=ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+    response_source = SourceDocument(
+        source_id="user-gap-response-r2",
+        content=raw_response,
+        provenance_type=ProvenanceType.CONTEMPORANEOUS_ELICITED_DECLARATION,
+        observed_at=T0 - timedelta(seconds=1),
+    )
+    response_candidates = compiler.compile_response(
+        response_source=response_source,
+        gap=gaps[0],
+        profile=profile,
+    )
+    if len(response_candidates.candidates) != 1:
+        raise ValueError("R2 remains NOT_DURABLY_RECORDED without authorized contemporaneous gap evidence")
+
+    response_observable = ObservableDecisionBundle(contract.id, (response_source,))
+    r2_grounded = response_candidates.candidates[0]
+    r2_evidence = EvidenceResolver().resolve(
+        observable=response_observable,
+        candidate=r2_grounded,
+        evidence_id="E-R2-ELICITED-PRODUCT-V1",
     )
     r2_candidate = RelationCandidate(
-        id="R2-CANDIDATE-PRODUCT-V1",
+        id=r2_grounded.candidate_id,
         relation_type=RelationType.HISTORICAL_SUPPORT,
         subject_id="F2",
-        object_id="D-104",
+        object_id=contract.id,
         evidence_refs=(r2_evidence.id,),
     )
     if not candidate_fills_gap(profile=profile, gap=gaps[0], candidate=r2_candidate):
         raise RuntimeError("R2 candidate does not fill the pre-assigned slot")
-
-    specs = (
-        ("F1", AuthorizedAssertion.ESTABLISHED_FACT, "Apex delivery performance was materially unstable."),
-        ("F2", AuthorizedAssertion.ESTABLISHED_FACT, "Beacon reactivation required roughly 10 weeks."),
-        ("R1", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, "Apex instability materially influenced D-104."),
-        ("M1", AuthorizedAssertion.CURRENT_MATCH_RULE, "Use Apex 97 percent over 30 days as the current applicability criterion."),
-        ("M2", AuthorizedAssertion.CURRENT_MATCH_RULE, "Use Beacon reactivation delay as the surviving applicability criterion."),
-        ("RC1", AuthorizedAssertion.REVISIT_RULE, "Review supplier redundancy after Apex reaches 97 percent for 30 days."),
+    ledger.append_batch(
+        recorded_at=T0 - timedelta(milliseconds=500),
+        entries=(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, r2_evidence),),
     )
-    evidence_specs = [
-        (entity_id, assertion, _evidence(
-            f"E-{entity_id}-PRODUCT-V1",
+
+    precommit_by_entity = {item.candidate_assertions[0].entity_id: item for item in preparation.precommit_evidence}
+    rule_specs = (
+        (
+            "M1",
+            AuthorizedAssertion.CURRENT_MATCH_RULE,
+            "Apex is considered stable after on-time delivery reaches 97% for at least 30 days.",
+        ),
+        (
+            "M2",
+            AuthorizedAssertion.CURRENT_MATCH_RULE,
+            "Beacon remains reaction capacity while reactivation is at least 70 days.",
+        ),
+        (
+            "RC1",
+            AuthorizedAssertion.REVISIT_RULE,
+            "Review supplier redundancy once Apex reaches 97% for at least 30 days.",
+        ),
+    )
+    rule_evidence = {
+        entity_id: _configured_rule_evidence(
+            observable=observable,
+            evidence_id=f"E-{entity_id}-PRODUCT-V1",
             entity_id=entity_id,
             assertion=assertion,
-            content=text,
-        ))
-        for entity_id, assertion, text in specs
-    ]
-    evidence_specs.insert(3, ("R2", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence))
+            quote=quote,
+        )
+        for entity_id, assertion, quote in rule_specs
+    }
 
     commit_entries: list[PendingLedgerEntry] = []
     auth_ids: dict[str, str] = {}
-    for entity_id, assertion, evidence in evidence_specs:
-        auth_ids[entity_id] = _append_bound_authorization(
+    commit_authority_specs = (
+        ("F1", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F1"], False),
+        ("F2", AuthorizedAssertion.ESTABLISHED_FACT, precommit_by_entity["F2"], False),
+        ("R1", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, precommit_by_entity["R1"], False),
+        ("R2", AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE, r2_evidence, False),
+        ("M1", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M1"], True),
+        ("M2", AuthorizedAssertion.CURRENT_MATCH_RULE, rule_evidence["M2"], True),
+        ("RC1", AuthorizedAssertion.REVISIT_RULE, rule_evidence["RC1"], True),
+    )
+    for entity_id, assertion, evidence, include_evidence in commit_authority_specs:
+        if include_evidence:
+            commit_entries.append(PendingLedgerEntry(LedgerEntryKind.EVIDENCE, evidence))
+        bound = _bound_authorization(
             registry=registry,
-            entries=commit_entries,
             authority_policy=authority_policy,
             contract=contract,
             contract_artifact=contract_artifact,
@@ -291,6 +487,8 @@ def run_golden_decision(*, answer_r2: bool = True) -> GoldenLoopResult:
             entity_id=entity_id,
             assertion=assertion,
         )
+        auth_ids[entity_id] = bound.id
+        commit_entries.append(PendingLedgerEntry(LedgerEntryKind.AUTHORIZATION, bound))
 
     ledger_commit = DecisionCommitRecord(
         id=COMMIT_ID,
@@ -326,17 +524,31 @@ def run_golden_decision(*, answer_r2: bool = True) -> GoldenLoopResult:
     r2 = materialized.relation("R2")
     if r2.knowledge_state is not HistoricalKnowledgeState.ESTABLISHED:
         raise RuntimeError("R2 must become ESTABLISHED only through temporal authority")
+    established_after_answer = frozenset(
+        relation.id
+        for relation in materialized.historical_relations
+        if relation.knowledge_state is HistoricalKnowledgeState.ESTABLISHED
+    )
+    if not composition_question_eligible(
+        composition=materialized.composition("C1"),
+        established_relation_ids=established_after_answer,
+    ):
+        raise RuntimeError("C1 should become structurally eligible only after R2 is established")
 
+    event_policy = event_policy_v1()
+    event_policies = {(event_policy.version, event_policy.policy_hash): event_policy}
     world_entries: list[PendingLedgerEntry] = []
     for raw in (
         _world_evidence("WE-BEACON-PRODUCT-V1", metric_key="beacon_reactivation_days", value=70, unit="days"),
         _world_evidence("WE-E301-APEX-PRODUCT-V1", metric_key="apex_on_time_rate", value=0.987, unit="ratio", window_days=30),
     ):
         auth = event_policy.authorize(raw=raw, metric_specs=metric_specs)
-        world_entries.extend((
-            PendingLedgerEntry(LedgerEntryKind.RAW_WORLD_EVIDENCE, raw),
-            PendingLedgerEntry(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION, auth),
-        ))
+        world_entries.extend(
+            (
+                PendingLedgerEntry(LedgerEntryKind.RAW_WORLD_EVIDENCE, raw),
+                PendingLedgerEntry(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION, auth),
+            )
+        )
     ledger.append_batch(recorded_at=T1, entries=tuple(world_entries))
 
     placeholder = CanonicalEvaluationResult("placeholder", (), (), (), ())
@@ -416,6 +628,8 @@ def run_golden_decision(*, answer_r2: bool = True) -> GoldenLoopResult:
             artifact_id=profile_artifact.artifact_id,
             version=profile.version,
             content_hash=profile_artifact.content_hash,
+            template_id=profile.template_id,
+            template_version=profile.template_version,
             assigned_at=assignment.assigned_at,
             question_budget=profile.question_budget,
             slot_ids=tuple(item.slot.id for item in profile.slots),
