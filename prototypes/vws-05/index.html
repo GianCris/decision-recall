@@ -5,149 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Decision Recall — VWS-0.5 Static Comprehension Prototype</title>
   <style>
-    :root {
-      --bg:#0b0d12; --panel:#121722; --soft:#1a2230; --text:#f5f7fb; --muted:#9aa7bb;
-      --line:#2b3547; --good:#7ee2a8; --warn:#ffd479; --bad:#ff8d8d; --accent:#9fc0ff;
-    }
-    * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif; }
-    .shell { max-width:1120px; margin:0 auto; padding:28px; }
-    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; }
-    .brand { font-weight:800; letter-spacing:-.02em; }
-    .badge { font-size:12px; color:var(--warn); border:1px solid #5a4a24; border-radius:999px; padding:7px 10px; }
-    .frame { display:none; min-height:610px; border:1px solid var(--line); border-radius:24px; background:linear-gradient(180deg,#121722,#0f131c); padding:38px; box-shadow:0 16px 60px rgba(0,0,0,.25); }
-    .frame.active { display:block; }
-    .eyebrow { text-transform:uppercase; letter-spacing:.14em; font-size:12px; color:var(--muted); margin-bottom:14px; }
-    h1 { font-size:44px; line-height:1.04; letter-spacing:-.04em; margin:0 0 18px; }
-    h2 { font-size:28px; line-height:1.15; letter-spacing:-.025em; margin:0 0 16px; }
-    p { color:var(--muted); line-height:1.55; }
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:28px; }
-    .card { border:1px solid var(--line); border-radius:18px; background:var(--panel); padding:20px; }
-    .label { color:var(--muted); font-size:13px; margin-bottom:8px; }
-    .value { font-size:19px; font-weight:700; }
-    .status { display:inline-block; margin-top:12px; padding:7px 10px; border-radius:999px; font-size:12px; font-weight:800; letter-spacing:.04em; }
-    .established { color:var(--good); background:#123124; }
-    .pending { color:var(--warn); background:#332914; }
-    .nomatch { color:var(--bad); background:#3a1f24; }
-    .question { max-width:780px; margin:54px auto 24px; text-align:center; font-size:37px; line-height:1.15; letter-spacing:-.035em; font-weight:760; }
-    .actions { display:flex; justify-content:center; gap:12px; margin-top:28px; }
-    button { appearance:none; border:1px solid var(--line); background:var(--soft); color:var(--text); padding:12px 18px; border-radius:12px; cursor:pointer; font-weight:700; }
-    button.primary { background:var(--text); color:#0a0d12; border-color:var(--text); }
-    button:disabled { opacity:.4; cursor:not-allowed; }
-    .provenance { text-align:center; color:var(--muted); font-size:14px; margin-top:12px; }
-    .axis { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:0; margin-top:28px; border:1px solid var(--line); border-radius:18px; overflow:hidden; }
-    .axis > div { padding:18px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
-    .axis > div:nth-child(3n) { border-right:0; }
-    .axis .head { color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; background:#10151e; }
-    .axis .rowname { font-weight:750; }
-    .hero { max-width:840px; margin:42px auto 0; text-align:center; }
-    .hero h1 { font-size:62px; }
-    .paused { display:inline-block; margin:8px 0 20px; padding:8px 12px; border-radius:999px; background:#332914; color:var(--warn); font-weight:800; }
-    .hero-copy { font-size:22px; line-height:1.45; color:var(--text); }
-    .fine { margin-top:16px; font-size:14px; color:var(--muted); }
-    .nav { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; }
-    .steps { color:var(--muted); font-size:13px; }
-    .capture { max-width:760px; margin:50px auto 0; text-align:center; }
-    .capture .big { font-size:34px; line-height:1.2; font-weight:760; }
-    .mini-flow { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:26px; }
-    .mini-flow span { border:1px solid var(--line); border-radius:999px; padding:8px 11px; color:var(--muted); font-size:13px; }
-    @media (max-width:760px){ .shell{padding:14px}.frame{padding:24px;min-height:620px}.grid2{grid-template-columns:1fr}h1{font-size:36px}.question{font-size:29px;margin-top:34px}.hero h1{font-size:44px}.axis{grid-template-columns:1fr}.axis>div{border-right:0}.axis .head{display:none} }
+    :root{--bg:#0b0d12;--panel:#121722;--soft:#1a2230;--text:#f5f7fb;--muted:#9aa7bb;--line:#2b3547;--good:#7ee2a8;--warn:#ffd479;--bad:#ff8d8d}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+    .shell{max-width:1120px;margin:0 auto;padding:28px}.top,.nav{display:flex;align-items:center;justify-content:space-between;gap:16px}.top{margin-bottom:22px}.brand{font-weight:800}.badge{font-size:12px;color:var(--warn);border:1px solid #5a4a24;border-radius:999px;padding:7px 10px}
+    .frame{display:none;min-height:610px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,#121722,#0f131c);padding:38px;box-shadow:0 16px 60px rgba(0,0,0,.25)}.frame.active{display:block}
+    .eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:12px;color:var(--muted);margin-bottom:14px}h1{font-size:44px;line-height:1.04;letter-spacing:-.04em;margin:0 0 18px}h2{font-size:28px;line-height:1.15;margin:0 0 16px}p{color:var(--muted);line-height:1.55}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:28px}.card{border:1px solid var(--line);border-radius:18px;background:var(--panel);padding:20px}.label{color:var(--muted);font-size:13px;margin-bottom:8px}.value{font-size:19px;font-weight:700}
+    .status{display:inline-block;margin-top:12px;padding:7px 10px;border-radius:999px;font-size:12px;font-weight:800;letter-spacing:.04em}.established{color:var(--good);background:#123124}.pending{color:var(--warn);background:#332914}.nomatch{color:var(--bad);background:#3a1f24}
+    .question{max-width:780px;margin:54px auto 24px;text-align:center;font-size:37px;line-height:1.15;font-weight:760}.actions{display:flex;justify-content:center;gap:12px;margin-top:28px}button{appearance:none;border:1px solid var(--line);background:var(--soft);color:var(--text);padding:12px 18px;border-radius:12px;cursor:pointer;font-weight:700}button.primary{background:var(--text);color:#0a0d12;border-color:var(--text)}button:disabled{opacity:.4;cursor:not-allowed}
+    .capture,.hero{max-width:840px;margin:50px auto 0;text-align:center}.capture .big{font-size:34px;line-height:1.2;font-weight:760}.provenance,.fine{color:var(--muted);font-size:14px;margin-top:12px}.mini-flow{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:26px}.mini-flow span{border:1px solid var(--line);border-radius:999px;padding:8px 11px;color:var(--muted);font-size:13px}
+    .axis{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:0;margin-top:28px;border:1px solid var(--line);border-radius:18px;overflow:hidden}.axis>div{padding:18px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.axis>div:nth-child(3n){border-right:0}.axis .head{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:#10151e}.axis .rowname{font-weight:750}
+    .history-note{margin-top:16px;border:1px solid var(--line);border-radius:14px;padding:14px 16px;color:var(--muted)}.hero h1{font-size:62px}.result{display:inline-block;margin:8px 0 20px;padding:8px 12px;border-radius:999px;background:#332914;color:var(--warn);font-weight:800}.hero-copy{font-size:22px;line-height:1.45;color:var(--text)}.nav{margin-top:18px}.steps{color:var(--muted);font-size:13px}
+    @media(max-width:760px){.shell{padding:14px}.frame{padding:24px;min-height:620px}.grid2{grid-template-columns:1fr}h1{font-size:36px}.question{font-size:29px;margin-top:34px}.hero h1{font-size:44px}.axis{grid-template-columns:1fr}.axis>div{border-right:0}.axis .head{display:none}}
   </style>
 </head>
 <body>
-  <div class="shell">
-    <div class="top">
-      <div class="brand">Decision Recall</div>
-      <div class="badge">VWS-0.5 STATIC COMPREHENSION PROTOTYPE · NOT LIVE</div>
+<div class="shell">
+  <div class="top"><div class="brand">Decision Recall</div><div class="badge">VWS-0.5 STATIC COMPREHENSION PROTOTYPE · NOT LIVE</div></div>
+
+  <section class="frame active" data-frame="1">
+    <div class="eyebrow">1 · Original decision</div>
+    <h1>Keep Apex and Beacon active for six months.</h1>
+    <p>Decision D-104 · evidence available at decision time</p>
+    <div class="grid2">
+      <div class="card"><div class="label">Observed evidence</div><div class="value">Apex delivery performance is materially unstable.</div></div>
+      <div class="card"><div class="label">Observed evidence</div><div class="value">Beacon takes ~10 weeks to reactivate.</div></div>
     </div>
+    <div class="card" style="margin-top:18px"><div class="label">Historical role already established</div><div class="value">Apex instability materially influenced this decision.</div><span class="status established">ESTABLISHED</span></div>
+  </section>
 
-    <section class="frame active" data-frame="1">
-      <div class="eyebrow">1 · Original decision</div>
-      <h1>Keep Apex and Beacon active for six months.</h1>
-      <p>Decision D-104 · evidence available at decision time</p>
-      <div class="grid2">
-        <div class="card"><div class="label">Observed evidence</div><div class="value">Apex delivery performance is materially unstable.</div></div>
-        <div class="card"><div class="label">Observed evidence</div><div class="value">Beacon takes ~10 weeks to reactivate.</div></div>
-      </div>
-      <div class="card" style="margin-top:18px">
-        <div class="label">Historical role already established</div>
-        <div class="value">Apex instability materially influenced this decision.</div>
-        <span class="status established">ESTABLISHED</span>
-      </div>
-    </section>
+  <section class="frame" data-frame="2">
+    <div class="eyebrow">2 · Missing dependency</div>
+    <h2 style="text-align:center">Decision Recall found one dependency the decision record does not establish.</h2>
+    <div class="question">Did preserving Beacon’s reaction capacity materially influence this decision?</div>
+    <div style="text-align:center"><span class="status pending">NOT ESTABLISHED YET</span></div>
+    <div class="actions"><button class="primary" id="yesButton">Yes</button><button>Not sure</button><button>Skip</button></div>
+    <div class="fine" style="text-align:center">This state is neither YES nor NO.</div>
+  </section>
 
-    <section class="frame" data-frame="2">
-      <div class="eyebrow">2 · Missing dependency</div>
-      <h2 style="text-align:center">Decision Recall found one dependency the decision record does not establish.</h2>
-      <div class="question">Did preserving Beacon’s reaction capacity materially influence this decision?</div>
-      <div style="text-align:center"><span class="status pending">NOT ESTABLISHED YET</span></div>
-      <div class="actions"><button class="primary" id="yesButton">Yes</button><button>Not sure</button><button>Skip</button></div>
-      <div class="fine" style="text-align:center">This state is neither YES nor NO.</div>
-    </section>
-
-    <section class="frame" data-frame="3">
-      <div class="eyebrow">3 · Captured</div>
-      <div class="capture">
-        <div class="big">Preserving Beacon’s reaction capacity materially influenced this decision.</div>
-        <div><span class="status established">HISTORICALLY ESTABLISHED</span></div>
-        <div class="provenance">Human declaration · captured at decision time</div>
-        <div class="mini-flow">
-          <span>Gemini · evidence extraction</span>
-          <span>Human · declaration</span>
-          <span>Decision Recall · authorized history</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="frame" data-frame="4">
-      <div class="eyebrow">4 · Six weeks later</div>
-      <h1>Apex now delivers 98.7% on time.</h1>
-      <p>30-day window · current world evidence</p>
-      <div class="axis">
-        <div class="head">Decision dependency</div><div class="head">What mattered then</div><div class="head">What still matches now</div>
-        <div class="rowname">Apex instability</div><div><span class="status established">ESTABLISHED</span></div><div><span class="status nomatch">NO LONGER MATCHES</span></div>
-        <div class="rowname">Beacon reaction capacity</div><div><span class="status established">ESTABLISHED</span></div><div><span class="status established">HISTORICAL RECORD PRESERVED</span></div>
-      </div>
-      <div class="fine">The present changed. The historical record did not get rewritten.</div>
-    </section>
-
-    <section class="frame" data-frame="5">
-      <div class="eyebrow">5 · Epistemic stop</div>
-      <div class="hero">
-        <p style="font-size:18px;color:var(--text)">Can the surviving historical reason alone justify reusing this decision now?</p>
-        <h1>I CAN’T ESTABLISH THAT</h1>
-        <div class="paused">SAFE REUSE PAUSED</div>
-        <div class="hero-copy">One historical reason survived.<br><strong>What we never established:</strong> was that reason enough by itself?</div>
-        <div class="fine">Decision Recall won’t infer what the historical record never established.</div>
-      </div>
-    </section>
-
-    <div class="nav">
-      <button id="prev">← Previous</button>
-      <div class="steps" id="steps">Frame 1 of 5</div>
-      <button id="next">Next →</button>
+  <section class="frame" data-frame="3">
+    <div class="eyebrow">3 · Captured</div>
+    <div class="capture">
+      <div class="big">Preserving Beacon’s reaction capacity materially influenced this decision.</div>
+      <div><span class="status established">HISTORICALLY ESTABLISHED</span></div>
+      <div class="provenance">Human declaration · captured at decision time</div>
+      <div class="mini-flow"><span>Gemini · evidence extraction</span><span>Human · declaration</span><span>Decision Recall · authorized record</span></div>
     </div>
-  </div>
+  </section>
 
-  <script>
-    let current = 1;
-    const total = 5;
-    const frames = [...document.querySelectorAll('.frame')];
-    const prev = document.getElementById('prev');
-    const next = document.getElementById('next');
-    const steps = document.getElementById('steps');
-    function show(n){
-      current = Math.max(1, Math.min(total, n));
-      frames.forEach(f => f.classList.toggle('active', Number(f.dataset.frame) === current));
-      steps.textContent = `Frame ${current} of ${total}`;
-      prev.disabled = current === 1;
-      next.disabled = current === total;
-    }
-    prev.addEventListener('click', () => show(current - 1));
-    next.addEventListener('click', () => show(current + 1));
-    document.getElementById('yesButton').addEventListener('click', () => show(3));
-    document.addEventListener('keydown', e => { if(e.key === 'ArrowRight') show(current+1); if(e.key === 'ArrowLeft') show(current-1); });
-    show(1);
-  </script>
+  <section class="frame" data-frame="4">
+    <div class="eyebrow">4 · Six weeks later</div>
+    <h1>Apex now delivers 98.7% on time.</h1>
+    <p>30-day window · current world evidence</p>
+    <div class="axis">
+      <div class="head">Decision dependency</div><div class="head">What mattered then</div><div class="head">What still matches now</div>
+      <div class="rowname">Apex instability</div><div><span class="status established">ESTABLISHED</span></div><div><span class="status nomatch">NO LONGER MATCHES</span></div>
+      <div class="rowname">Beacon reaction capacity</div><div><span class="status established">ESTABLISHED</span></div><div><span class="status established">STILL MATCHES</span></div>
+    </div>
+    <div class="history-note"><strong>Historical record:</strong> both decision roles remain established. Current-world match is evaluated separately.</div>
+  </section>
+
+  <section class="frame" data-frame="5">
+    <div class="eyebrow">5 · Epistemic stop</div>
+    <div class="hero">
+      <p style="font-size:18px;color:var(--text)">Can the surviving historical reason alone justify reusing this decision now?</p>
+      <h1>I CAN’T ESTABLISH THAT</h1>
+      <div class="result">SAFE REUSE · INSUFFICIENT EVIDENCE</div>
+      <div class="hero-copy">One current reason still matches.<br><strong>What we never established:</strong> was that reason enough by itself?</div>
+      <div class="fine">Decision Recall won’t infer what the historical record never established.</div>
+    </div>
+  </section>
+
+  <div class="nav"><button id="prev">← Previous</button><div class="steps" id="steps">Frame 1 of 5</div><button id="next">Next →</button></div>
+</div>
+<script>
+let current=1;const total=5;const frames=[...document.querySelectorAll('.frame')];const prev=document.getElementById('prev');const next=document.getElementById('next');const steps=document.getElementById('steps');function show(n){current=Math.max(1,Math.min(total,n));frames.forEach(f=>f.classList.toggle('active',Number(f.dataset.frame)===current));steps.textContent=`Frame ${current} of ${total}`;prev.disabled=current===1;next.disabled=current===total}prev.addEventListener('click',()=>show(current-1));next.addEventListener('click',()=>show(current+1));document.getElementById('yesButton').addEventListener('click',()=>show(3));document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')show(current+1);if(e.key==='ArrowLeft')show(current-1)});show(1);
+</script>
 </body>
 </html>
