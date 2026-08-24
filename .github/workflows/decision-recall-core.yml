@@ -44,7 +44,7 @@ jobs:
       - name: Install repository package
         run: python -m pip install -e .
 
-      - name: Run Decision Recall M1, M2, M2.1 full-replay, and PostgreSQL parity tests
+      - name: Run Decision Recall M1, M2, M2.1, Product Checkpoint 1, and PostgreSQL parity tests
         run: |
           python -m unittest -v \
             tests/test_decision_recall_milestone1.py \
@@ -52,7 +52,8 @@ jobs:
             tests/test_decision_recall_milestone2_integration.py \
             tests/test_decision_recall_postgres.py \
             tests/test_decision_recall_m21.py \
-            tests/test_decision_recall_m21_postgres.py
+            tests/test_decision_recall_m21_postgres.py \
+            tests/test_decision_recall_product_golden_loop.py
 
   repository-offline-regression:
     runs-on: ubuntu-latest
@@ -85,6 +86,7 @@ jobs:
               'test_decision_recall_postgres.py',
               'test_decision_recall_m21.py',
               'test_decision_recall_m21_postgres.py',
+              'test_decision_recall_product_golden_loop.py',
               'test_dev_autopsy.py',
               'test_pauto_provider_probe.py',
               'test_round_b_recovered_analysis.py',
