@@ -485,6 +485,7 @@ def run_golden_decision(
     )
     r2_evidence = declaration_to_evidence(
         declaration=declaration,
+        session=session,
         gap=gaps[0],
         evidence_id="E-R2-ELICITED-PRODUCT-V1",
     )
