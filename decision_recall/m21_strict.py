@@ -198,7 +198,7 @@ def _required_target_authority(
 
     required: dict[str, AuthorizedAssertion] = {}
     for relation_id in relation_ids:
-        relation = contract.historical_relation(relation_id)
+        relation = contract.relation(relation_id)
         required[relation.id] = AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
         required[relation.subject_id] = AuthorizedAssertion.ESTABLISHED_FACT
     for rule_id in match_rule_ids:
