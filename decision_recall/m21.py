@@ -135,15 +135,11 @@ class LedgerLike(Protocol):
     @property
     def head_seq(self) -> int: ...
     def entries_as_of(self, cutoff_seq: int) -> Tuple[LedgerEntry, ...]: ...
+    def entry(self, entry_id: str) -> LedgerEntry: ...
 
 
 class M21Registry:
-    """Small immutable-artifact registry for M2.1 semantics.
-
-    Persistence adapters can mirror these records. The registry deliberately keeps
-    semantic artifacts separate from the temporal ledger: the ledger says WHEN a
-    record became visible; artifacts say WHAT exact object/version/hash it means.
-    """
+    """Immutable semantic artifact registry; temporal claims live in the ledger."""
 
     def __init__(self) -> None:
         self.artifacts: dict[str, CanonicalArtifact] = {}
@@ -224,8 +220,6 @@ def _canonical_value(value):
     if isinstance(value, float):
         if not math.isfinite(value):
             raise TemporalIntegrityError("canonical floats must be finite")
-        # JSON's shortest round-trippable representation is deterministic in Python
-        # for finite IEEE-754 doubles. Normalize negative zero.
         return 0.0 if value == 0.0 else value
     if hasattr(value, "__dataclass_fields__"):
         return {
@@ -300,9 +294,53 @@ def make_world_schema_artifact(metric_specs: Mapping[str, MetricSpec], *, versio
     )
 
 
+def _semantic_definition(entity):
+    """Return WHAT an entity means, excluding WHAT WE KNOW about it."""
+    if isinstance(entity, Claim):
+        return {
+            "kind": "claim",
+            "id": entity.id,
+            "claim_type": entity.claim_type,
+            "predicate_key": entity.predicate_key,
+            "current_metric_key": entity.current_metric_key,
+        }
+    if isinstance(entity, HistoricalRelation):
+        return {
+            "kind": "historical_relation",
+            "id": entity.id,
+            "relation_type": entity.relation_type,
+            "subject_id": entity.subject_id,
+            "object_id": entity.object_id,
+        }
+    if isinstance(entity, CompositionState):
+        return {
+            "kind": "composition",
+            "id": entity.id,
+            "composition_kind": entity.kind,
+            "relation_ids": entity.relation_ids,
+            "target_ref": entity.target_ref,
+        }
+    if isinstance(entity, CurrentMatchRule):
+        return {
+            "kind": "current_match_rule",
+            "id": entity.id,
+            "premise_id": entity.premise_id,
+            "condition": entity.condition,
+            "match_when_condition_true": entity.match_when_condition_true,
+        }
+    if isinstance(entity, RevisitRule):
+        return {
+            "kind": "revisit_rule",
+            "id": entity.id,
+            "condition": entity.condition,
+        }
+    if isinstance(entity, DecisionContract):
+        return {"kind": "decision", "id": entity.id, "action": entity.action}
+    raise TemporalIntegrityError(f"unsupported semantic entity: {type(entity)!r}")
+
+
 def entity_definition_hash(contract: DecisionContract, entity_id: str) -> str:
-    entity = _entity(contract, entity_id)
-    return canonical_hash(entity)
+    return canonical_hash(_semantic_definition(_entity(contract, entity_id)))
 
 
 def _entity(contract: DecisionContract, entity_id: str):
@@ -400,8 +438,6 @@ def contract_from_artifact(artifact: CanonicalArtifact) -> DecisionContract:
             for item in data["revisit_rules"]
         ),
     )
-    # Artifact is the immutable historical definition. Historical epistemic state is
-    # rematerialized from scoped authority below, not trusted from serialized status.
     return contract
 
 
@@ -454,12 +490,6 @@ def validate_evidence_integrity(evidence: TemporalEvidenceRecord) -> None:
 
 
 def active_entries_as_of(ledger: LedgerLike, cutoff_seq: int) -> Tuple[LedgerEntry, ...]:
-    """Dependency-aware effective view.
-
-    Corrections make their target inactive. An authorization whose supporting
-    evidence becomes inactive is also inactive; history remains present in
-    entries_as_of(old_cutoff), so earlier views are unchanged.
-    """
     all_entries = ledger.entries_as_of(cutoff_seq)
     corrected = {
         entry.payload.corrects_entry_id
@@ -488,10 +518,7 @@ def active_entries_as_of(ledger: LedgerLike, cutoff_seq: int) -> Tuple[LedgerEnt
                 if auth.raw_evidence_id not in active:
                     del active[entry_id]
                     changed = True
-    return tuple(
-        entry for entry in all_entries
-        if entry.entry_id in active
-    )
+    return tuple(entry for entry in all_entries if entry.entry_id in active)
 
 
 def _entry_seq(ledger: LedgerLike, entry_id: str, cutoff_seq: int) -> Optional[int]:
@@ -563,12 +590,11 @@ def materialize_committed_contract(
             value = CompositionValue.NOT_DURABLY_RECORDED
         compositions.append(replace(composition, value=value, authorization=None))
 
-    materialized = replace(
+    return replace(
         original,
         historical_relations=tuple(relations),
         composition_states=tuple(compositions),
     )
-    return materialized
 
 
 def known_historical_state(
@@ -576,8 +602,6 @@ def known_historical_state(
     contract: DecisionContract,
     entity_id: str,
 ) -> str:
-    # Deliberately reject out-of-scope entities rather than mapping absence to
-    # NOT_DURABLY_RECORDED.
     try:
         entity = _entity(contract, entity_id)
     except TemporalIntegrityError as exc:
@@ -590,7 +614,7 @@ def known_historical_state(
 
 
 # ---------------------------------------------------------------------------
-# Bitemporal world projection (availability cutoff != world_time)
+# Bitemporal world projection
 # ---------------------------------------------------------------------------
 
 
@@ -601,6 +625,7 @@ def authorized_world_state_at(
     world_time: datetime,
     event_policies: Mapping[Tuple[str, str], EventPolicy],
     metric_specs: Mapping[str, MetricSpec],
+    required_policy_ref: Optional[Tuple[str, str]] = None,
 ) -> CanonicalWorldState:
     if world_time.tzinfo is None or world_time.utcoffset() is None:
         raise TemporalIntegrityError("world_time must be timezone-aware")
@@ -615,6 +640,10 @@ def authorized_world_state_at(
         entry for entry in entries
         if entry.kind is LedgerEntryKind.WORLD_EVENT_AUTHORIZATION
         and isinstance(entry.payload, WorldEventAuthorizationRecord)
+        and (
+            required_policy_ref is None
+            or (entry.payload.policy_version, entry.payload.policy_hash) == required_policy_ref
+        )
     ]
 
     candidates: dict[str, list[tuple[datetime, float, str, Optional[int], str]]] = {}
@@ -624,6 +653,8 @@ def authorized_world_state_at(
         if raw_entry is None:
             continue
         raw = raw_entry.payload
+        if source_hash(raw.content) != raw.source_content_hash:
+            raise TemporalIntegrityError("consumed raw-world evidence content hash mismatch")
         policy = event_policies.get((auth.policy_version, auth.policy_hash))
         if policy is None:
             raise TemporalIntegrityError("unknown event policy version/hash")
@@ -635,10 +666,6 @@ def authorized_world_state_at(
         )
         if replayed != auth:
             raise TemporalIntegrityError("world-event authorization does not replay")
-
-        # V1 aggregate semantics: POINT becomes effective at observed_at; INTERVAL
-        # becomes effective at interval end. It is not treated as true at each instant
-        # inside the aggregation window.
         effective_at = raw.temporal_reference.effective_at()
         if effective_at > world_time:
             continue
@@ -654,8 +681,6 @@ def authorized_world_state_at(
         latest = [row for row in rows if row[0] == latest_time]
         signatures = {(row[1], row[2], row[3]) for row in latest}
         if len(signatures) > 1:
-            # Conflicting, equally applicable authorized observations: omit the
-            # metric so downstream CurrentMatch becomes UNKNOWN rather than choosing.
             continue
         row = latest[0]
         output.append(
@@ -671,7 +696,7 @@ def authorized_world_state_at(
 
 
 # ---------------------------------------------------------------------------
-# Full replay
+# Full replay (legacy M2.1 entry point; strict path is in m21_strict.py)
 # ---------------------------------------------------------------------------
 
 
@@ -712,7 +737,8 @@ def full_replay(
         raise TemporalIntegrityError("target artifact unavailable/mismatched")
     if schema_artifact is None or schema_artifact.content_hash != evaluation.world_schema_hash:
         raise TemporalIntegrityError("world schema artifact unavailable/mismatched")
-    if (evaluation.event_policy_version, evaluation.event_policy_hash) not in event_policies:
+    policy_ref = (evaluation.event_policy_version, evaluation.event_policy_hash)
+    if policy_ref not in event_policies:
         raise TemporalIntegrityError("event policy identity mismatch")
 
     contract = materialize_committed_contract(registry=registry, ledger=ledger, commit=commit)
@@ -724,6 +750,7 @@ def full_replay(
         world_time=evaluation.world_time,
         event_policies=event_policies,
         metric_specs=metric_specs,
+        required_policy_ref=policy_ref,
     )
 
     validated = validate_contract(contract)
