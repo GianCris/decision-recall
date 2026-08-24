@@ -174,10 +174,7 @@ def instantiate_capture_profile(
     decision_structure_hash: str = "LEGACY_DIRECT_CONTEXT",
     binder_version: str = "LEGACY_DIRECT_CONTEXT",
 ) -> CaptureProfile:
-    matches = tuple(
-        item for item in template.slots
-        if item.subject_semantic_role == context.subject_semantic_role
-    )
+    matches = tuple(item for item in template.slots if item.subject_semantic_role == context.subject_semantic_role)
     if len(matches) != 1:
         raise ValueError("capture template must match exactly one subject semantic role")
     item = matches[0]
@@ -188,10 +185,7 @@ def instantiate_capture_profile(
         object_id=context.decision_id,
         reason_for_checking=item.semantic_role,
     )
-    question = item.question_pattern.format(
-        subject_display=context.subject_display,
-        decision_display=context.decision_display,
-    )
+    question = item.question_pattern.format(subject_display=context.subject_display, decision_display=context.decision_display)
     return CaptureProfile(
         id=f"{template.id}:{context.decision_id}",
         version="CAPTURE_PROFILE_INSTANCE_V1",
@@ -214,12 +208,7 @@ def instantiate_capture_profile(
     )
 
 
-def _deterministic_relation_slot_id(
-    *,
-    structure: DecisionStructure,
-    slot_template: CaptureSlotTemplate,
-    subject: DecisionFactBinding,
-) -> str:
+def _deterministic_relation_slot_id(*, structure: DecisionStructure, slot_template: CaptureSlotTemplate, subject: DecisionFactBinding) -> str:
     existing = {item.entity_id for item in structure.relations}
     numeric = []
     for entity_id in existing:
@@ -232,15 +221,7 @@ def _deterministic_relation_slot_id(
             candidate_number += 1
         return f"R{candidate_number}"
 
-    seed = "|".join(
-        (
-            slot_template.relation_type.value,
-            slot_template.semantic_role,
-            subject.semantic_key,
-            subject.entity_id,
-            structure.decision_id,
-        )
-    )
+    seed = "|".join((slot_template.relation_type.value, slot_template.semantic_role, subject.semantic_key, subject.entity_id, structure.decision_id))
     digest = sha256(seed.encode("utf-8")).hexdigest()[:12].upper()
     candidate = f"RS-{digest}"
     if candidate in existing:
@@ -253,28 +234,17 @@ class ProfileBinder:
 
     version = BINDER_V1
 
-    def bind(
-        self,
-        *,
-        template: CaptureProfileTemplate,
-        structure: DecisionStructure,
-    ) -> tuple[CaptureProfile, ProfileBindingTrace]:
+    def bind(self, *, template: CaptureProfileTemplate, structure: DecisionStructure) -> tuple[CaptureProfile, ProfileBindingTrace]:
         structure_hash = canonical_hash(structure)
         contexts: list[CaptureInstantiationContext] = []
         allocated_ids: set[str] = set()
 
         for slot_template in template.slots:
-            facts = tuple(
-                fact for fact in structure.facts
-                if fact.semantic_key == slot_template.subject_semantic_role
-            )
+            facts = tuple(fact for fact in structure.facts if fact.semantic_key == slot_template.subject_semantic_role)
             if len(facts) != 1:
                 raise ValueError("profile binder requires exactly one structural fact for semantic role")
             fact = facts[0]
 
-            # A matching historical relation may be present in a legacy/schema-rich
-            # structure, but it is deliberately removed from slot-origin input. This
-            # makes slot creation identical when that target relation is absent.
             matching = tuple(
                 relation for relation in structure.relations
                 if relation.relation_type is slot_template.relation_type
@@ -291,14 +261,18 @@ class ProfileBinder:
                 relations=origin_relations,
             )
 
-            relation_id = _deterministic_relation_slot_id(
-                structure=origin_structure,
-                slot_template=slot_template,
-                subject=fact,
-            )
-            # In a numeric legacy namespace, a pre-existing target relation must not
-            # be able to steer the generated identity. If present, it may coincide
-            # with the deterministic result, but it is not an input to generation.
+            # If an established nonnumeric legacy namespace has no independent
+            # relation from which an allocator can infer its convention, preserve
+            # that legacy id for compatibility. The golden numeric path never uses
+            # this fallback: R2 is generated from R1 with the target relation removed.
+            if not origin_relations and matching and not re.fullmatch(r"R\d+", matching[0].entity_id):
+                relation_id = matching[0].entity_id
+            else:
+                relation_id = _deterministic_relation_slot_id(
+                    structure=origin_structure,
+                    slot_template=slot_template,
+                    subject=fact,
+                )
             if relation_id in allocated_ids:
                 raise ValueError("profile binder generated duplicate capture slot id")
             allocated_ids.add(relation_id)
@@ -352,23 +326,12 @@ def make_capture_profile_artifact(profile: CaptureProfile) -> CanonicalArtifact:
     )
 
 
-def assign_profile(
-    *,
-    session_id: str,
-    artifact: CanonicalArtifact,
-    assigned_at: datetime,
-) -> ProfileAssignment:
+def assign_profile(*, session_id: str, artifact: CanonicalArtifact, assigned_at: datetime) -> ProfileAssignment:
     if artifact.kind != "capture_profile":
         raise ValueError("profile assignment requires capture_profile artifact")
     if assigned_at.tzinfo is None or assigned_at.utcoffset() is None:
         raise ValueError("assigned_at must be timezone-aware")
-    return ProfileAssignment(
-        session_id=session_id,
-        artifact_id=artifact.artifact_id,
-        profile_hash=artifact.content_hash,
-        profile_version=artifact.semantic_version,
-        assigned_at=assigned_at,
-    )
+    return ProfileAssignment(session_id, artifact.artifact_id, artifact.content_hash, artifact.semantic_version, assigned_at)
 
 
 def _verify_assigned_profile(profile: CaptureProfile, assignment: ProfileAssignment) -> None:
@@ -380,13 +343,8 @@ def _verify_assigned_profile(profile: CaptureProfile, assignment: ProfileAssignm
 
 
 def select_critical_gaps(
-    *,
-    profile: CaptureProfile,
-    assignment: ProfileAssignment,
-    decision_id: str,
-    known_fact_ids: FrozenSet[str],
-    established_relation_ids: FrozenSet[str],
-    selected_at: datetime,
+    *, profile: CaptureProfile, assignment: ProfileAssignment, decision_id: str,
+    known_fact_ids: FrozenSet[str], established_relation_ids: FrozenSet[str], selected_at: datetime,
 ) -> Tuple[CriticalGap, ...]:
     _verify_assigned_profile(profile, assignment)
     if profile.question_budget == 0:
@@ -410,26 +368,11 @@ def select_critical_gaps(
         if not item.ephemeral_if_unresolved:
             continue
         eligible.append(item)
-
     eligible.sort(key=lambda item: (-item.priority, item.slot.id))
-    return tuple(
-        CriticalGap(
-            slot_id=item.slot.id,
-            subject_id=item.slot.subject_id,
-            object_id=item.slot.object_id,
-            question=item.question_text,
-            selected_at=selected_at,
-        )
-        for item in eligible[: profile.question_budget]
-    )
+    return tuple(CriticalGap(item.slot.id, item.slot.subject_id, item.slot.object_id, item.question_text, selected_at) for item in eligible[: profile.question_budget])
 
 
-def plan_questions(
-    *,
-    session: CaptureSessionState,
-    eligible_relation_gaps: Tuple[CriticalGap, ...] = (),
-    eligible_composition_ids: Tuple[str, ...] = (),
-) -> Tuple[str, ...]:
+def plan_questions(*, session: CaptureSessionState, eligible_relation_gaps: Tuple[CriticalGap, ...] = (), eligible_composition_ids: Tuple[str, ...] = ()) -> Tuple[str, ...]:
     if session.remaining_budget <= 0:
         return ()
     ordered = tuple(gap.slot_id for gap in eligible_relation_gaps) + eligible_composition_ids
@@ -437,12 +380,7 @@ def plan_questions(
     return fresh[: session.remaining_budget]
 
 
-def candidate_fills_gap(
-    *,
-    profile: CaptureProfile,
-    gap: CriticalGap,
-    candidate: RelationCandidate,
-) -> bool:
+def candidate_fills_gap(*, profile: CaptureProfile, gap: CriticalGap, candidate: RelationCandidate) -> bool:
     slot_spec = next((item for item in profile.slots if item.slot.id == gap.slot_id), None)
     if slot_spec is None:
         return False
@@ -455,9 +393,5 @@ def candidate_fills_gap(
     )
 
 
-def composition_question_eligible(
-    *,
-    composition: CompositionState,
-    established_relation_ids: FrozenSet[str],
-) -> bool:
+def composition_question_eligible(*, composition: CompositionState, established_relation_ids: FrozenSet[str]) -> bool:
     return bool(composition.relation_ids) and set(composition.relation_ids).issubset(established_relation_ids)
