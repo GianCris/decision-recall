@@ -100,10 +100,10 @@ class CandidateCompiler(Protocol):
 
 
 class SemanticCandidateResolver:
-    """Resolve model semantic keys only inside the contract/profile surface.
+    """Resolve semantic keys only inside the controlled contract/profile surface.
 
-    The compiler never chooses canonical IDs. Unknown, ambiguous, wrong-type, or
-    unassigned semantic keys fail closed.
+    Observable compilation cannot establish an unresolved capture-profile slot. A
+    profile slot is resolvable only on the explicitly elicited-response path.
     """
 
     @staticmethod
@@ -116,6 +116,7 @@ class SemanticCandidateResolver:
         candidate: GroundedCandidate,
         contract: DecisionContract,
         profile: CaptureProfile,
+        allow_profile_slots: bool = False,
     ) -> ResolvedGroundedCandidate:
         if candidate.kind is CandidateKind.FACT:
             matches = tuple(
@@ -132,6 +133,8 @@ class SemanticCandidateResolver:
                 if item.semantic_role == candidate.semantic_key
             )
             if profile_matches:
+                if not allow_profile_slots:
+                    raise ValueError("unresolved capture slot cannot be established from observable compilation")
                 if len(profile_matches) != 1:
                     raise ValueError("historical semantic key is ambiguous in assigned profile")
                 slot = profile_matches[0].slot
@@ -159,7 +162,7 @@ class SemanticCandidateResolver:
                     raise ValueError("historical semantic key is unknown or ambiguous in allowed contract surface")
                 entity_id = matches[0].id
             assertion = AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
-        else:  # pragma: no cover - enum makes this defensive
+        else:  # pragma: no cover
             raise ValueError("unsupported candidate kind")
 
         return ResolvedGroundedCandidate(
