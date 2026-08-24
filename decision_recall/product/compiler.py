@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Mapping, Protocol, Tuple
 
-from ..domain import ProvenanceType
+from ..domain import DecisionContract, ProvenanceType, RelationType
 from ..temporal import (
     AuthorizedAssertion,
     CandidateAssertion,
@@ -15,12 +16,9 @@ from ..temporal import (
 from .capture import CaptureProfile, CriticalGap
 
 
-_ALLOWED_COMPILER_ASSERTIONS = frozenset(
-    {
-        AuthorizedAssertion.ESTABLISHED_FACT,
-        AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE,
-    }
-)
+class CandidateKind(str, Enum):
+    FACT = "fact"
+    HISTORICAL_ROLE = "historical_role"
 
 
 @dataclass(frozen=True)
@@ -51,22 +49,32 @@ class ObservableDecisionBundle:
 
 @dataclass(frozen=True)
 class GroundedCandidate:
-    """A compiler may point at source spans, never manufacture authoritative evidence."""
+    """Probabilistic output: semantic key + exact source span, never canonical entity id."""
 
     candidate_id: str
-    entity_id: str
-    assertion: AuthorizedAssertion
+    semantic_key: str
+    kind: CandidateKind
     source_id: str
     start: int
     end: int
 
     def __post_init__(self) -> None:
-        if self.assertion not in _ALLOWED_COMPILER_ASSERTIONS:
-            raise ValueError("compiler cannot emit rule, composition, or epistemic authorization states")
-        if not self.candidate_id.strip() or not self.entity_id.strip() or not self.source_id.strip():
-            raise ValueError("grounded candidate ids/source are required")
+        if not self.candidate_id.strip() or not self.semantic_key.strip() or not self.source_id.strip():
+            raise ValueError("grounded candidate ids/semantic key/source are required")
         if self.start < 0 or self.end <= self.start:
             raise ValueError("grounded candidate span is invalid")
+
+
+@dataclass(frozen=True)
+class ResolvedGroundedCandidate:
+    candidate_id: str
+    semantic_key: str
+    kind: CandidateKind
+    entity_id: str
+    assertion: AuthorizedAssertion
+    source_id: str
+    start: int
+    end: int
 
 
 @dataclass(frozen=True)
@@ -91,6 +99,81 @@ class CandidateCompiler(Protocol):
     ) -> CandidateBundle: ...
 
 
+class SemanticCandidateResolver:
+    """Resolve model semantic keys only inside the contract/profile surface.
+
+    The compiler never chooses canonical IDs. Unknown, ambiguous, wrong-type, or
+    unassigned semantic keys fail closed.
+    """
+
+    @staticmethod
+    def historical_key(subject_predicate_key: str) -> str:
+        return f"historical_support:{subject_predicate_key}"
+
+    def resolve(
+        self,
+        *,
+        candidate: GroundedCandidate,
+        contract: DecisionContract,
+        profile: CaptureProfile,
+    ) -> ResolvedGroundedCandidate:
+        if candidate.kind is CandidateKind.FACT:
+            matches = tuple(
+                claim for claim in contract.claims
+                if claim.predicate_key == candidate.semantic_key
+            )
+            if len(matches) != 1:
+                raise ValueError("fact semantic key is unknown or ambiguous in allowed contract surface")
+            entity_id = matches[0].id
+            assertion = AuthorizedAssertion.ESTABLISHED_FACT
+        elif candidate.kind is CandidateKind.HISTORICAL_ROLE:
+            profile_matches = tuple(
+                item for item in profile.slots
+                if item.semantic_role == candidate.semantic_key
+            )
+            if profile_matches:
+                if len(profile_matches) != 1:
+                    raise ValueError("historical semantic key is ambiguous in assigned profile")
+                slot = profile_matches[0].slot
+                relations = tuple(
+                    relation for relation in contract.historical_relations
+                    if relation.id == slot.id
+                    and relation.relation_type is slot.relation_type
+                    and relation.subject_id == slot.subject_id
+                    and relation.object_id == slot.object_id
+                )
+                if len(relations) != 1:
+                    raise ValueError("assigned relation slot is not present in contract semantic surface")
+                entity_id = relations[0].id
+            else:
+                matches = []
+                for relation in contract.historical_relations:
+                    if relation.relation_type is not RelationType.HISTORICAL_SUPPORT:
+                        continue
+                    subject = next((claim for claim in contract.claims if claim.id == relation.subject_id), None)
+                    if subject is None:
+                        continue
+                    if self.historical_key(subject.predicate_key) == candidate.semantic_key:
+                        matches.append(relation)
+                if len(matches) != 1:
+                    raise ValueError("historical semantic key is unknown or ambiguous in allowed contract surface")
+                entity_id = matches[0].id
+            assertion = AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE
+        else:  # pragma: no cover - enum makes this defensive
+            raise ValueError("unsupported candidate kind")
+
+        return ResolvedGroundedCandidate(
+            candidate_id=candidate.candidate_id,
+            semantic_key=candidate.semantic_key,
+            kind=candidate.kind,
+            entity_id=entity_id,
+            assertion=assertion,
+            source_id=candidate.source_id,
+            start=candidate.start,
+            end=candidate.end,
+        )
+
+
 def _span(content: str, quote: str) -> tuple[int, int]:
     start = content.find(quote)
     if start < 0:
@@ -99,7 +182,7 @@ def _span(content: str, quote: str) -> tuple[int, int]:
 
 
 class DeterministicGoldenCompiler:
-    """Fixture compiler for CI. Same grounded schema that Gemini must later return."""
+    """Fixture compiler for CI. Gemini must later return this same bounded schema."""
 
     def compile_observable(
         self,
@@ -120,26 +203,12 @@ class DeterministicGoldenCompiler:
         r1_start, r1_end = _span(decision, r1_quote)
         return CandidateBundle(
             candidates=(
-                GroundedCandidate(
-                    "GC-F1",
-                    "F1",
-                    AuthorizedAssertion.ESTABLISHED_FACT,
-                    "decision-note",
-                    f1_start,
-                    f1_end,
-                ),
-                GroundedCandidate(
-                    "GC-F2",
-                    "F2",
-                    AuthorizedAssertion.ESTABLISHED_FACT,
-                    "supplier-record",
-                    f2_start,
-                    f2_end,
-                ),
+                GroundedCandidate("GC-F1", "apex_delivery_instability", CandidateKind.FACT, "decision-note", f1_start, f1_end),
+                GroundedCandidate("GC-F2", "beacon_reactivation_delay", CandidateKind.FACT, "supplier-record", f2_start, f2_end),
                 GroundedCandidate(
                     "GC-R1",
-                    "R1",
-                    AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE,
+                    SemanticCandidateResolver.historical_key("apex_delivery_instability"),
+                    CandidateKind.HISTORICAL_ROLE,
                     "decision-note",
                     r1_start,
                     r1_end,
@@ -154,7 +223,8 @@ class DeterministicGoldenCompiler:
         gap: CriticalGap,
         profile: CaptureProfile,
     ) -> CandidateBundle:
-        if gap.slot_id not in {item.slot.id for item in profile.slots}:
+        slot_spec = next((item for item in profile.slots if item.slot.id == gap.slot_id), None)
+        if slot_spec is None:
             raise ValueError("response gap is not part of assigned profile")
         text = response_source.content.strip()
         if not text.lower().startswith("yes"):
@@ -163,8 +233,8 @@ class DeterministicGoldenCompiler:
             candidates=(
                 GroundedCandidate(
                     "GC-R2-RESPONSE",
-                    gap.slot_id,
-                    AuthorizedAssertion.ESTABLISHED_HISTORICAL_ROLE,
+                    slot_spec.semantic_role,
+                    CandidateKind.HISTORICAL_ROLE,
                     response_source.source_id,
                     0,
                     len(response_source.content),
@@ -174,13 +244,13 @@ class DeterministicGoldenCompiler:
 
 
 class EvidenceResolver:
-    """Build evidence only from exact bytes/text inside immutable observable sources."""
+    """Build evidence only from exact text inside immutable observable sources."""
 
     def resolve(
         self,
         *,
         observable: ObservableDecisionBundle,
-        candidate: GroundedCandidate,
+        candidate: ResolvedGroundedCandidate,
         evidence_id: str,
     ) -> TemporalEvidenceRecord:
         source = observable.source_map().get(candidate.source_id)
