@@ -223,7 +223,7 @@ def prepare_golden_capture(
             decision_id=decision_id,
             relation_id="R2",
             subject_id="F2",
-            subject_predicate_key="beacon_reactivation_delay",
+            subject_semantic_role="SUPPLIER_REACTIVATION_DELAY",
             subject_display="Beacon's roughly 10-week reactivation delay",
         ),
     )
