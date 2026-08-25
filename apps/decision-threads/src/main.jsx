@@ -14,12 +14,12 @@ const COPY = {
     eyebrow: "Gap discovered",
     title: "One relationship is missing.",
     body: "The records show Beacon’s restart delay, but not whether keeping Beacon available actually mattered to the decision.",
-    action: "Yes — Beacon mattered",
+    action: "Yes — verify human response",
   },
   2: {
-    eyebrow: "Captured at decision time",
-    title: "The missing edge becomes durable history.",
-    body: "The person’s answer changes the decision record. Decision Recall can use that relationship later without pretending it came from documents.",
+    eyebrow: "Server-authoritative capture",
+    title: "The historical role is now established.",
+    body: "Cloud Run verified the human response against the issued capture before the deterministic authority path established R2.",
     action: "Advance six weeks",
   },
   3: {
@@ -42,7 +42,9 @@ const humanizeMatch = (state) => ({
   matches: "still matches",
 }[state] || "current evaluation");
 
-function DrawPath({ d, kind = "history", delay = 0, dim = false }) {
+const delay = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+function DrawPath({ d, kind = "history", delay: pathDelay = 0, dim = false }) {
   const markerEnd = kind === "current-match"
     ? "url(#arrowGreen)"
     : kind === "current-mismatch"
@@ -57,19 +59,19 @@ function DrawPath({ d, kind = "history", delay = 0, dim = false }) {
       className={`thread ${kind} ${dim ? "dim" : ""}`}
       initial={{ pathLength: 0, opacity: 0 }}
       animate={{ pathLength: 1, opacity: 1 }}
-      transition={{ duration: 0.72, delay, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: 0.72, delay: pathDelay, ease: [0.22, 1, 0.36, 1] }}
     />
   );
 }
 
-function Pulse({ d, tone = "green", duration = 1.15, delay = 0, stopAtEnd = false }) {
+function Pulse({ d, tone = "green", duration = 1.15, delay: pulseDelay = 0, stopAtEnd = false }) {
   return (
-    <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay }}>
+    <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: pulseDelay }}>
       <circle r="13" className={`trace-pulse-halo ${tone}`}>
-        <animateMotion dur={`${duration}s`} begin={`${delay}s`} fill="freeze" repeatCount="1" path={d} />
+        <animateMotion dur={`${duration}s`} begin={`${pulseDelay}s`} fill="freeze" repeatCount="1" path={d} />
       </circle>
       <circle r="7" className={`trace-pulse ${tone}`}>
-        <animateMotion dur={`${duration}s`} begin={`${delay}s`} fill="freeze" repeatCount="1" path={d} />
+        <animateMotion dur={`${duration}s`} begin={`${pulseDelay}s`} fill="freeze" repeatCount="1" path={d} />
       </circle>
       {stopAtEnd && <circle r="16" className={`trace-stop ${tone}`} opacity="0" />}
     </motion.g>
@@ -95,12 +97,12 @@ function InstrumentNode({ x, y, title, subtitle, kind = "entity", status, active
   );
 }
 
-function Gap({ x, y, label, emphasis = false, delay = 0 }) {
+function Gap({ x, y, label, emphasis = false, delay: gapDelay = 0 }) {
   return (
     <motion.g
       initial={{ opacity: 0, scale: 0.72 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: "spring", stiffness: 250, damping: 18, delay }}
+      transition={{ type: "spring", stiffness: 250, damping: 18, delay: gapDelay }}
     >
       <circle cx={x} cy={y} r={emphasis ? 36 : 28} className={`gap-ripple outer ${emphasis ? "emphasis" : ""}`} />
       <circle cx={x} cy={y} r={emphasis ? 28 : 22} className={`gap-ripple inner ${emphasis ? "emphasis" : ""}`} />
@@ -116,10 +118,11 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
   const gapDiscovered = phase >= 1 && !captureEstablished;
   const now = phase >= 3;
   const reuse = phase >= 4;
-  const matches = useMemo(() => Object.fromEntries(view.current_matches.map((x) => [x.entity_id, x.state])), [view]);
+  const matches = useMemo(
+    () => Object.fromEntries((view.current_matches || []).map((x) => [x.entity_id, x.state])),
+    [view],
+  );
 
-  // Keep the core graph clear of the contextual copy. Apex/Beacon/D-104 remain
-  // spatially stable across phases; only semantic layers change around them.
   const apexToDecision = "M405 210 C500 212 555 280 620 318";
   const beaconToGap = "M405 500 C500 500 540 430 590 390";
   const gapToDecision = "M618 378 C635 362 646 348 658 338";
@@ -141,6 +144,11 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
         <span>THEN</span>
         <motion.div className="time-line" animate={{ scaleX: now ? 1 : 0.18 }} transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }} />
         <span className={now ? "visible" : "ghost"}>NOW</span>
+        {now && (
+          <motion.div className="time-delta" initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}>
+            6 WEEKS
+          </motion.div>
+        )}
       </div>
 
       <svg viewBox="0 0 1240 720" className="decision-canvas" role="img" aria-label="Decision Recall temporal decision graph">
@@ -232,7 +240,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           </motion.g>
         )}
 
-        {reuse && (
+        {reuse && view.reuse_boundary && (
           <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <DrawPath d={reuseApproach} kind="authorized-reuse" delay={0.05} />
             <Gap x={1118} y={602} label="sufficiency" emphasis />
@@ -264,7 +272,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
         )}
       </AnimatePresence>
 
-      {phase === 4 && boundaryRevealed && (
+      {phase === 4 && boundaryRevealed && view.reuse_boundary && (
         <motion.div className="boundary-hero" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.42 }}>
           <span className="context-label">EPISTEMIC STOP</span>
           <h2>I CAN’T ESTABLISH THAT</h2>
@@ -276,52 +284,183 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
   );
 }
 
-async function loadPresentation() {
+function preparationView(preparation) {
+  return {
+    decision_id: preparation.decision_id,
+    capture: {
+      relation_id: preparation.gap_id,
+      question: preparation.question,
+      knowledge_state: preparation.knowledge_state,
+    },
+    current_matches: [],
+    reuse_boundary: null,
+    evaluation_hash: null,
+    replay_hash: null,
+  };
+}
+
+async function loadInitialState() {
   try {
-    const runtime = await fetch("/api/presentation", { cache: "no-store" });
-    if (!runtime.ok) throw new Error(`runtime API returned ${runtime.status}`);
-    return { view: await runtime.json(), source: "live" };
+    const runtime = await fetch("/api/capture-preparation", { cache: "no-store" });
+    if (!runtime.ok) throw new Error(`capture preparation returned ${runtime.status}`);
+    const preparation = await runtime.json();
+    return {
+      preparation,
+      view: preparationView(preparation),
+      source: "live",
+    };
   } catch (runtimeError) {
     const fallback = await fetch("/demo-state.json", { cache: "no-store" });
     if (!fallback.ok) throw runtimeError;
-    return { view: await fallback.json(), source: "fallback" };
+    const view = await fallback.json();
+    return {
+      preparation: null,
+      view,
+      source: "replay",
+    };
   }
 }
 
 function App() {
   const [view, setView] = useState(null);
+  const [preparation, setPreparation] = useState(null);
   const [source, setSource] = useState("loading");
   const [error, setError] = useState(null);
   const [phase, setPhase] = useState(0);
   const [boundaryRevealed, setBoundaryRevealed] = useState(false);
   const [proofOpen, setProofOpen] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState("idle");
+  const [captureError, setCaptureError] = useState(null);
+  const [captureValidation, setCaptureValidation] = useState(null);
+
+  const applyInitialState = ({ preparation: nextPreparation, view: nextView, source: nextSource }) => {
+    setPreparation(nextPreparation);
+    setView(nextView);
+    setSource(nextSource);
+    setCaptureStatus("idle");
+    setCaptureError(null);
+    setCaptureValidation(null);
+  };
 
   useEffect(() => {
-    loadPresentation()
-      .then(({ view: nextView, source: nextSource }) => {
-        setView(nextView);
-        setSource(nextSource);
-      })
-      .catch(setError);
+    loadInitialState().then(applyInitialState).catch(setError);
   }, []);
 
   useEffect(() => {
     setBoundaryRevealed(false);
     if (phase === 4) {
-      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1550);
+      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1850);
       return () => window.clearTimeout(timer);
     }
     return undefined;
   }, [phase]);
 
   if (error) {
-    return <main className="boot"><h1>Decision Threads needs engine state.</h1><p>Cloud runtime and deterministic fallback both failed.</p><pre>{String(error)}</pre></main>;
+    return <main className="boot"><h1>Decision Threads needs engine state.</h1><p>Cloud runtime and deterministic replay both failed.</p><pre>{String(error)}</pre></main>;
   }
-  if (!view) return <main className="boot"><p>Loading Decision Recall engine state…</p></main>;
+  if (!view) return <main className="boot"><p>Loading authoritative capture state…</p></main>;
 
   const copy = COPY[phase];
-  const next = () => setPhase((p) => (p === 4 ? 0 : p + 1));
   const live = source === "live";
+  const pending = captureStatus === "pending";
+
+  const submitLiveCapture = async () => {
+    if (!live || !preparation || pending) return;
+
+    setCaptureStatus("pending");
+    setCaptureError(null);
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch("/api/capture", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          capture_session_id: preparation.capture_session_id,
+          gap_id: preparation.gap_id,
+          question_hash: preparation.question_hash,
+          answer: "yes",
+        }),
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (!response.ok) {
+        const message = payload?.message || `capture gate returned ${response.status}`;
+        throw new Error(message);
+      }
+      if (payload?.capture_validation?.status !== "accepted" || !payload?.presentation) {
+        throw new Error("capture gate returned an invalid success envelope");
+      }
+
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < 420) await delay(420 - elapsed);
+
+      setCaptureValidation(payload.capture_validation);
+      setView(payload.presentation);
+      setCaptureStatus("verified");
+      setPhase(2);
+    } catch (captureFailure) {
+      setCaptureStatus("error");
+      setCaptureError(
+        captureFailure?.name === "AbortError"
+          ? "Cloud Run verification timed out. The historical role remains unresolved."
+          : captureFailure?.message || String(captureFailure),
+      );
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  };
+
+  const resetExperience = async () => {
+    setBoundaryRevealed(false);
+    setPhase(0);
+    try {
+      applyInitialState(await loadInitialState());
+    } catch (resetError) {
+      setError(resetError);
+    }
+  };
+
+  const next = async () => {
+    if (phase === 0) {
+      setPhase(1);
+      return;
+    }
+    if (phase === 1) {
+      if (live) {
+        await submitLiveCapture();
+      } else {
+        setPhase(2);
+      }
+      return;
+    }
+    if (phase === 4) {
+      await resetExperience();
+      return;
+    }
+    setPhase((current) => current + 1);
+  };
+
+  const actionLabel = phase === 1
+    ? live
+      ? pending
+        ? "Verifying with Cloud Run…"
+        : captureStatus === "error"
+          ? "Retry verification"
+          : COPY[1].action
+      : "Replay capture"
+    : copy.action;
+
+  const boundary = view.reuse_boundary;
 
   return (
     <main className={`app phase-${phase}`}>
@@ -332,12 +471,35 @@ function App() {
         </div>
         <div className="top-actions">
           <button className="proof-button" onClick={() => setProofOpen((x) => !x)}>Why / Proof</button>
-          <div className={`live-dot ${live ? "live" : "fallback"}`}><span />{live ? "Cloud Run · live engine" : "deterministic fallback"}</div>
+          <div className={`live-dot ${live ? "live" : "fallback"}`}>
+            <span />{live ? "Cloud Run · live engine" : "deterministic replay"}
+          </div>
         </div>
       </header>
 
       <section className="experience">
         <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} />
+
+        {phase === 1 && live && pending && (
+          <motion.div className="capture-gate-state pending" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <b>VERIFYING WITH CLOUD RUN…</b>
+            <span>No server acceptance, no historical edge.</span>
+          </motion.div>
+        )}
+
+        {phase === 1 && live && captureStatus === "error" && (
+          <motion.div className="capture-gate-state error" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <b>RESPONSE NOT VERIFIED</b>
+            <span>{captureError}</span>
+          </motion.div>
+        )}
+
+        {phase === 2 && live && captureValidation && (
+          <motion.div className="capture-gate-state accepted" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.3 }}>
+            <b>HUMAN RESPONSE · VERIFIED</b>
+            <span>R2 · HISTORICAL ROLE ESTABLISHED</span>
+          </motion.div>
+        )}
 
         {!(phase === 4 && boundaryRevealed) && (
           <motion.aside className="scene-note" key={phase} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.3 }}>
@@ -349,8 +511,8 @@ function App() {
 
         <div className="scene-index"><b>0{phase + 1}</b><span>/05</span></div>
 
-        <button onClick={next} className={`primary ${phase === 4 ? "replay" : ""}`}>
-          {copy.action}<span>→</span>
+        <button onClick={next} disabled={pending} className={`primary ${phase === 4 ? "replay" : ""} ${pending ? "pending" : ""}`}>
+          {actionLabel}<span>→</span>
         </button>
       </section>
 
@@ -358,16 +520,20 @@ function App() {
         {proofOpen && (
           <motion.aside className="proof-drawer" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", stiffness: 260, damping: 28 }}>
             <button className="proof-close" onClick={() => setProofOpen(false)}>×</button>
-            <span className="drawer-eyebrow">ENGINE-BOUND PROOF</span>
-            <h3>{live ? "Rendered from the live Cloud Run engine." : "Rendered from deterministic fallback state."}</h3>
+            <span className="drawer-eyebrow">CAPTURE GATE / ENGINE PROOF</span>
+            <h3>{live ? "Server-authoritative capture state." : "Deterministic replay mode."}</h3>
             <dl>
-              <div><dt>Presentation source</dt><dd>{live ? "Cloud Run /api/presentation" : "demo-state.json fallback"}</dd></div>
-              <div><dt>Capture relation</dt><dd>{view.capture.relation_id}</dd></div>
-              <div><dt>Knowledge state</dt><dd>{view.capture.knowledge_state}</dd></div>
-              <div><dt>Reuse result</dt><dd>{view.reuse_boundary.safe_reuse_result}</dd></div>
-              <div><dt>Limiting requirement</dt><dd>{view.reuse_boundary.limiting_requirements.join(", ")}</dd></div>
-              <div><dt>Evaluation hash</dt><dd><code>{view.evaluation_hash}</code></dd></div>
-              <div><dt>Replay hash</dt><dd><code>{view.replay_hash}</code></dd></div>
+              <div><dt>Presentation source</dt><dd>{live ? "Cloud Run /api/capture-preparation" : "demo-state.json replay"}</dd></div>
+              {preparation && <div><dt>Capture session</dt><dd>{preparation.capture_session_id}</dd></div>}
+              <div><dt>Issued gap</dt><dd>{preparation?.gap_id || view.capture.relation_id}</dd></div>
+              {preparation && <div><dt>Pre-capture knowledge</dt><dd>{preparation.knowledge_state}</dd></div>}
+              {captureValidation && <div><dt>Human response</dt><dd>{captureValidation.answer.toUpperCase()} · VERIFIED</dd></div>}
+              {captureValidation && <div><dt>Winner completion</dt><dd>{captureValidation.completion.toUpperCase()}</dd></div>}
+              <div><dt>Current knowledge</dt><dd>{view.capture.knowledge_state}</dd></div>
+              {boundary && <div><dt>Reuse result</dt><dd>{boundary.safe_reuse_result}</dd></div>}
+              {boundary && <div><dt>Limiting requirement</dt><dd>{boundary.limiting_requirements.join(", ")}</dd></div>}
+              {view.evaluation_hash && <div><dt>Evaluation hash</dt><dd><code>{view.evaluation_hash}</code></dd></div>}
+              {view.replay_hash && <div><dt>Replay hash</dt><dd><code>{view.replay_hash}</code></dd></div>}
             </dl>
           </motion.aside>
         )}
