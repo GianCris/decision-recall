@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+
+:root {
+  --paper: #f3efe6;
+  --ink: #111318;
+  --muted: #6f7480;
+  --line: #d9d3c8;
+  --card: rgba(255, 255, 255, 0.7);
+  --green: #1a8a5b;
+  --green-soft: #ddf3e8;
+  --amber: #b17313;
+  --amber-soft: #fff1cf;
+  --red: #c64747;
+  --blue: #2f5cff;
+  --blue-soft: #e7ecff;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at 70% 0%, #fff9eb 0, var(--paper) 38%, #ece7de 100%); color: var(--ink); font-family: "DM Sans", system-ui, sans-serif; }
+button { font: inherit; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.app { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; padding: 22px 28px 20px; overflow: hidden; }
+.topbar { max-width: 1500px; width: 100%; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+.brand-wrap { display: flex; gap: 12px; align-items: center; }
+.brand-wrap > div:last-child { display: grid; }
+.brand-wrap b { font: 800 16px/1.1 "Manrope", sans-serif; }
+.brand-wrap span { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.brand-mark { width: 38px; height: 38px; border-radius: 12px; background: var(--ink); color: white; display: grid; place-items: center; font: 800 12px/1 "Manrope"; box-shadow: 0 8px 24px rgba(17,19,24,.16); }
+.truth-badge { font-size: 11px; color: #515660; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.55); backdrop-filter: blur(12px); }
+.truth-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--green); box-shadow: 0 0 0 4px rgba(26,138,91,.1); }
+
+.hero-grid { max-width: 1500px; width: 100%; margin: 12px auto 8px; display: grid; grid-template-columns: minmax(320px, .78fr) minmax(700px, 1.65fr); gap: 28px; align-items: stretch; }
+.narrative { display: flex; align-items: center; padding: 20px 6px 20px 10px; }
+.eyebrow { color: var(--blue); letter-spacing: .12em; text-transform: uppercase; font: 700 11px/1 "Manrope"; margin-bottom: 16px; }
+.narrative h1 { font: 800 clamp(40px, 4.1vw, 76px)/.98 "Manrope"; letter-spacing: -.055em; margin: 0; max-width: 650px; }
+.narrative p { color: var(--muted); font-size: clamp(16px, 1.25vw, 21px); line-height: 1.5; max-width: 610px; margin-top: 20px; }
+.phase-4 .narrative h1 { color: var(--amber); }
+
+.canvas-shell { position: relative; min-height: 650px; border-radius: 34px; border: 1px solid rgba(199,191,179,.85); background: linear-gradient(145deg, rgba(255,255,255,.88), rgba(255,253,247,.68)); box-shadow: 0 28px 80px rgba(62,53,43,.12), inset 0 1px 0 rgba(255,255,255,.9); overflow: hidden; }
+.canvas-shell::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(17,19,24,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(17,19,24,.035) 1px, transparent 1px); background-size: 28px 28px; mask-image: linear-gradient(to bottom, rgba(0,0,0,.5), transparent 84%); pointer-events: none; }
+.time-rail { position: absolute; left: 56px; right: 56px; top: 28px; height: 24px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; z-index: 2; }
+.time-label { font: 800 10px/1 "Manrope"; letter-spacing: .12em; color: var(--muted); }
+.time-label.now { opacity: .28; transition: opacity .3s ease; }.time-label.now.visible { opacity: 1; }
+.time-progress { height: 2px; background: linear-gradient(90deg, var(--ink), var(--blue)); transform-origin: left; }
+.decision-canvas { width: 100%; height: 100%; min-height: 650px; position: relative; z-index: 1; }
+.canvas-kicker { fill: #8b8e95; font: 700 11px "Manrope"; letter-spacing: .12em; }
+.node-card { fill: rgba(255,255,255,.94); stroke: #d8d2c8; stroke-width: 1.2; filter: drop-shadow(0 12px 24px rgba(28,25,22,.07)); }
+.node-card.warning { stroke: #e1c489; }.node-card.stable { stroke: #9ccdb4; }.node-card.changed { stroke: #aebeff; }.node-card.decision { fill: #13161d; stroke: #13161d; }.node-card.broken { stroke: #e8bbbb; fill: #fff8f8; }.node-card.reuse { stroke: #ddb765; fill: #fffaf0; }
+.node-title { font: 800 15px "Manrope"; fill: #17191f; }.node-card.decision + .node-title { fill: white; }.node-subtitle { font: 500 11px "DM Sans"; fill: #747985; }
+.thread-path { stroke: var(--green); stroke-width: 3.4; stroke-linecap: round; }
+.thread-path.muted { stroke: #b8b4ac; }.thread-path.broken { stroke: var(--red); stroke-dasharray: 9 9; }.thread-path.missing { stroke: var(--amber); stroke-dasharray: 10 12; }
+.pulse-dot { fill: white; stroke: var(--green); stroke-width: 3; filter: drop-shadow(0 0 8px rgba(26,138,91,.5)); }
+.gap-node { fill: var(--amber-soft); stroke: #ddb45d; stroke-width: 1.3; }.gap-mark { fill: var(--amber); font: 800 21px "Manrope"; }
+
+.gap-callout { position: absolute; left: 50%; transform: translateX(-50%); bottom: 28px; width: min(620px, calc(100% - 52px)); padding: 18px 20px; border: 1px solid #dec178; background: rgba(255,247,225,.94); backdrop-filter: blur(14px); border-radius: 18px; box-shadow: 0 14px 40px rgba(131,88,15,.12); z-index: 3; display: grid; gap: 5px; }
+.callout-label { color: var(--amber); font: 800 10px "Manrope"; letter-spacing: .11em; }.gap-callout strong { font: 700 17px/1.3 "Manrope"; }.gap-callout span { color: #806b49; font-size: 12px; }
+.boundary-chip { position: absolute; right: 28px; bottom: 28px; padding: 13px 16px; border-radius: 16px; background: rgba(255,241,207,.92); border: 1px solid #e3c57a; z-index: 3; display: grid; gap: 3px; box-shadow: 0 12px 32px rgba(132,88,13,.11); }
+.boundary-chip span { text-transform: uppercase; color: var(--amber); font: 800 10px "Manrope"; letter-spacing: .09em; }.boundary-chip b { font-size: 12px; }
+
+.action-dock { max-width: 1500px; width: 100%; margin: 0 auto; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 20px; }
+.phase-index { font: 800 24px "Manrope"; }.phase-index span { color: #9a9da4; font-size: 12px; margin-left: 3px; }
+.primary { border: 0; border-radius: 999px; background: var(--ink); color: white; min-width: 240px; padding: 15px 20px; font: 700 14px "Manrope"; cursor: pointer; display: flex; justify-content: center; gap: 18px; align-items: center; box-shadow: 0 12px 26px rgba(17,19,24,.16); transition: transform .18s ease, box-shadow .18s ease; }
+.primary:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(17,19,24,.18); }.primary.replay { background: var(--amber); }
+.proof-mini { justify-self: end; color: #858991; font-size: 10px; }
+.proof-mini code { color: #545963; }
+.boot { padding: 60px; font-family: system-ui; }.boot code { background: #eee; padding: 2px 5px; }
+
+@media (max-width: 1050px) {
+  .app { overflow: auto; }
+  .hero-grid { grid-template-columns: 1fr; }
+  .narrative { min-height: 280px; }
+  .canvas-shell, .decision-canvas { min-height: 560px; }
+  .action-dock { grid-template-columns: auto 1fr; }.proof-mini { display: none; }.primary { justify-self: end; }
+}
+@media (max-width: 640px) {
+  .app { padding: 14px; }.truth-badge { display: none; }.hero-grid { gap: 8px; }.narrative { min-height: 240px; }
+  .canvas-shell, .decision-canvas { min-height: 500px; }.time-rail { left: 24px; right: 24px; }.action-dock { grid-template-columns: auto 1fr; }.primary { min-width: 0; width: 100%; }
+}
