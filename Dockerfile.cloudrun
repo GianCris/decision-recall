@@ -6,6 +6,8 @@ COPY decision_recall ./decision_recall
 RUN python -m pip install --no-cache-dir -e .
 COPY apps/decision-threads ./apps/decision-threads
 RUN python -m decision_recall.product.presentation_export --output apps/decision-threads/public/demo-state.json
+RUN mkdir -p apps/decision-threads/public/proof
+COPY artifacts/pc2-credentialed-release-evidence.json apps/decision-threads/public/proof/pc2-credentialed-release-evidence.json
 
 FROM node:24-slim AS web
 
