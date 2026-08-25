@@ -37,12 +37,23 @@ const COPY = {
 };
 
 const labelForMatch = (id) => ({ M1: "Apex instability", M2: "Beacon restart delay" }[id] || id);
+const humanizeMatch = (state) => ({
+  does_not_match: "no longer matches",
+  matches: "still matches",
+}[state] || "current evaluation");
 
 function DrawPath({ d, kind = "history", delay = 0, dim = false }) {
+  const markerEnd = kind === "current-match"
+    ? "url(#arrowGreen)"
+    : kind === "current-mismatch"
+      ? "url(#arrowRed)"
+      : undefined;
+
   return (
     <motion.path
       d={d}
       fill="none"
+      markerEnd={markerEnd}
       className={`thread ${kind} ${dim ? "dim" : ""}`}
       initial={{ pathLength: 0, opacity: 0 }}
       animate={{ pathLength: 1, opacity: 1 }}
@@ -54,10 +65,13 @@ function DrawPath({ d, kind = "history", delay = 0, dim = false }) {
 function Pulse({ d, tone = "green", duration = 1.15, delay = 0, stopAtEnd = false }) {
   return (
     <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay }}>
-      <circle r="6" className={`trace-pulse ${tone}`}>
+      <circle r="13" className={`trace-pulse-halo ${tone}`}>
         <animateMotion dur={`${duration}s`} begin={`${delay}s`} fill="freeze" repeatCount="1" path={d} />
       </circle>
-      {stopAtEnd && <circle r="12" className={`trace-halo ${tone}`} opacity="0" />}
+      <circle r="7" className={`trace-pulse ${tone}`}>
+        <animateMotion dur={`${duration}s`} begin={`${delay}s`} fill="freeze" repeatCount="1" path={d} />
+      </circle>
+      {stopAtEnd && <circle r="16" className={`trace-stop ${tone}`} opacity="0" />}
     </motion.g>
   );
 }
@@ -81,9 +95,13 @@ function InstrumentNode({ x, y, title, subtitle, kind = "entity", status, active
   );
 }
 
-function Gap({ x, y, label, emphasis = false }) {
+function Gap({ x, y, label, emphasis = false, delay = 0 }) {
   return (
-    <motion.g initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", stiffness: 250, damping: 18 }}>
+    <motion.g
+      initial={{ opacity: 0, scale: 0.72 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: "spring", stiffness: 250, damping: 18, delay }}
+    >
       <circle cx={x} cy={y} r={emphasis ? 36 : 28} className={`gap-ripple outer ${emphasis ? "emphasis" : ""}`} />
       <circle cx={x} cy={y} r={emphasis ? 28 : 22} className={`gap-ripple inner ${emphasis ? "emphasis" : ""}`} />
       <circle cx={x} cy={y} r={emphasis ? 19 : 16} className="gap-core" />
@@ -95,21 +113,23 @@ function Gap({ x, y, label, emphasis = false }) {
 
 function DecisionCanvas({ phase, view, boundaryRevealed }) {
   const captureEstablished = phase >= 2;
+  const gapDiscovered = phase >= 1 && !captureEstablished;
   const now = phase >= 3;
   const reuse = phase >= 4;
   const matches = useMemo(() => Object.fromEntries(view.current_matches.map((x) => [x.entity_id, x.state])), [view]);
 
-  const apexToDecision = "M235 210 C360 210 408 294 495 318";
-  const beaconToGap = "M235 500 C360 500 405 420 468 376";
-  const gapToDecision = "M498 366 C520 350 534 338 550 329";
-  const beaconToDecision = "M235 500 C372 500 430 410 548 346";
-  const apexEval = "M652 314 C760 278 832 236 930 210";
-  const beaconEval = "M652 352 C756 393 830 452 930 500";
-  const reuseApproach = "M930 500 C986 522 1017 546 1036 575";
-  const unsupportedEdge = "M1068 608 C1110 628 1152 640 1196 640";
+  // Keep the core graph clear of the contextual copy. Apex/Beacon/D-104 remain
+  // spatially stable across phases; only semantic layers change around them.
+  const apexToDecision = "M405 210 C500 212 555 280 620 318";
+  const beaconToGap = "M405 500 C500 500 540 430 590 390";
+  const gapToDecision = "M618 378 C635 362 646 348 658 338";
+  const beaconToDecision = "M405 500 C530 500 590 415 660 350";
+  const apexEval = "M762 312 C850 278 918 238 1010 210";
+  const beaconEval = "M762 352 C855 392 922 450 1010 500";
+  const reuseApproach = "M1010 500 C1056 522 1082 548 1102 584";
+  const unsupportedEdge = "M1134 612 C1170 626 1200 634 1220 636";
 
-  const showApexPulse = phase === 0;
-  const showGapPulse = phase === 1;
+  const showInspectPulses = phase === 1;
   const showCommitPulse = phase === 2;
   const showCurrentPulse = phase === 3;
   const showReusePulse = phase === 4 && !boundaryRevealed;
@@ -129,14 +149,20 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
             <stop offset="0%" stopColor="#252933" />
             <stop offset="100%" stopColor="#0d1016" />
           </linearGradient>
+          <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" className="arrow-green" />
+          </marker>
+          <marker id="arrowRed" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" className="arrow-red" />
+          </marker>
         </defs>
 
-        <text x="118" y="105" className="plane-label">OBSERVED WORLD</text>
-        <text x="520" y="105" className="plane-label">DECISION MEMORY</text>
-        {now && <motion.text x="910" y="105" className="plane-label" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>CURRENT WORLD</motion.text>}
+        <text x="320" y="105" className="plane-label">OBSERVED WORLD</text>
+        <text x="620" y="105" className="plane-label">DECISION MEMORY</text>
+        {now && <motion.text x="995" y="105" className="plane-label" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>CURRENT WORLD</motion.text>}
 
         <InstrumentNode
-          x={180}
+          x={350}
           y={210}
           title="Apex"
           subtitle={now ? "98.7% on-time · 30d" : "delivery unstable"}
@@ -144,24 +170,29 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           status={now ? { label: "CURRENT EVIDENCE", tone: "blue" } : { label: "OBSERVED AT T0", tone: "neutral" }}
         />
         <InstrumentNode
-          x={180}
+          x={350}
           y={500}
           title="Beacon"
           subtitle="~10 weeks to restart"
           kind="entity"
           status={{ label: now ? "CURRENT EVIDENCE" : "OBSERVED AT T0", tone: now ? "green" : "neutral" }}
         />
-        <InstrumentNode x={610} y={335} title="D-104" subtitle="keep both · 6 months" kind="decision" status={{ label: "RECORDED DECISION", tone: "neutral" }} />
+        <InstrumentNode x={720} y={335} title="D-104" subtitle="keep both · 6 months" kind="decision" status={{ label: "RECORDED DECISION", tone: "neutral" }} />
 
         <DrawPath d={apexToDecision} kind="history" dim={now} />
-        {showApexPulse && <Pulse d={apexToDecision} />}
 
-        {!captureEstablished && (
+        {gapDiscovered && (
           <>
-            <DrawPath d={beaconToGap} kind="missing" delay={0.08} />
-            <Gap x={486} y={373} label="missing dependency" emphasis={phase === 1} />
-            <DrawPath d={gapToDecision} kind="missing-faint" delay={0.12} />
-            {showGapPulse && <Pulse d={beaconToGap} tone="amber" duration={1.1} stopAtEnd />}
+            <DrawPath d={beaconToGap} kind="missing" delay={0.55} />
+            <Gap x={606} y={384} label="missing dependency" emphasis delay={0.72} />
+            <DrawPath d={gapToDecision} kind="missing-faint" delay={0.78} />
+          </>
+        )}
+
+        {showInspectPulses && (
+          <>
+            <Pulse d={apexToDecision} duration={0.82} />
+            <Pulse d={beaconToGap} tone="amber" duration={0.98} delay={0.68} stopAtEnd />
           </>
         )}
 
@@ -169,9 +200,9 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           <>
             <DrawPath d={beaconToDecision} kind="history" dim={now} delay={0.04} />
             {phase === 2 && (
-              <motion.circle cx="486" cy="373" r="23" className="resolved-burst" initial={{ scale: 0, opacity: 0 }} animate={{ scale: [0, 1.8, 1], opacity: [0, 0.75, 0] }} transition={{ duration: 0.75 }} />
+              <motion.circle cx="606" cy="384" r="26" className="resolved-burst" initial={{ scale: 0, opacity: 0 }} animate={{ scale: [0, 1.9, 1], opacity: [0, 0.82, 0] }} transition={{ duration: 0.78 }} />
             )}
-            {showCommitPulse && <Pulse d={beaconToDecision} duration={1.25} />}
+            {showCommitPulse && <Pulse d={beaconToDecision} duration={1.18} />}
           </>
         )}
 
@@ -179,24 +210,24 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.45 }}>
             <DrawPath d={apexEval} kind="current-mismatch" delay={0.08} />
             <DrawPath d={beaconEval} kind="current-match" delay={0.12} />
-            {showCurrentPulse && <Pulse d={apexEval} tone="red" duration={1.05} />}
-            {showCurrentPulse && <Pulse d={beaconEval} tone="green" duration={1.1} delay={0.18} />}
+            {showCurrentPulse && <Pulse d={apexEval} tone="red" duration={1.0} />}
+            {showCurrentPulse && <Pulse d={beaconEval} tone="green" duration={1.08} delay={0.18} />}
 
             <InstrumentNode
-              x={980}
+              x={1060}
               y={210}
               title={labelForMatch("M1")}
-              subtitle={matches.M1 || "current state"}
+              subtitle={humanizeMatch(matches.M1)}
               kind="signal"
               status={{ label: "NO LONGER MATCHES", tone: "red" }}
             />
             <InstrumentNode
-              x={980}
+              x={1060}
               y={500}
               title={labelForMatch("M2")}
-              subtitle={matches.M2 || "current state"}
+              subtitle={humanizeMatch(matches.M2)}
               kind="signal"
-              status={{ label: "MATCHES NOW", tone: "green" }}
+              status={{ label: "STILL MATCHES", tone: "green" }}
             />
           </motion.g>
         )}
@@ -204,13 +235,13 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
         {reuse && (
           <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <DrawPath d={reuseApproach} kind="authorized-reuse" delay={0.05} />
-            <Gap x={1052} y={595} label="sufficiency" emphasis />
-            <motion.path d={unsupportedEdge} fill="none" className="thread unsupported" initial={{ opacity: 0 }} animate={{ opacity: boundaryRevealed ? 1 : 0.25 }} transition={{ duration: 0.35 }} />
+            <Gap x={1118} y={602} label="sufficiency" emphasis />
+            <motion.path d={unsupportedEdge} fill="none" className="thread unsupported" initial={{ opacity: 0 }} animate={{ opacity: boundaryRevealed ? 0.42 : 0.18 }} transition={{ duration: 0.35 }} />
             {showReusePulse && <Pulse d={reuseApproach} tone="amber" duration={1.15} stopAtEnd />}
-            <motion.g animate={{ opacity: boundaryRevealed ? 1 : 0.38 }} transition={{ duration: 0.35 }}>
-              <circle cx="1200" cy="640" r="34" className="reuse-destination" />
-              <text x="1200" y="636" textAnchor="middle" className="reuse-label">REUSE</text>
-              <text x="1200" y="651" textAnchor="middle" className="reuse-sub">old decision</text>
+            <motion.g animate={{ opacity: boundaryRevealed ? 0.72 : 0.34 }} transition={{ duration: 0.35 }}>
+              <circle cx="1220" cy="636" r="30" className="reuse-destination" />
+              <text x="1220" y="633" textAnchor="middle" className="reuse-label">REUSE</text>
+              <text x="1220" y="647" textAnchor="middle" className="reuse-sub">old decision</text>
             </motion.g>
           </motion.g>
         )}
@@ -218,7 +249,14 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
 
       <AnimatePresence mode="wait">
         {phase === 1 && (
-          <motion.div className="context-card gap-question" key="question" initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8 }}>
+          <motion.div
+            className="context-card gap-question"
+            key="question"
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.34, delay: 1.55 }}
+          >
             <span className="context-label">ONE MISSING DECISION DEPENDENCY</span>
             <strong>{view.capture.question}</strong>
             <small>Decision Recall asks instead of inferring.</small>
@@ -227,7 +265,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
       </AnimatePresence>
 
       {phase === 4 && boundaryRevealed && (
-        <motion.div className="boundary-hero" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.42 }}>
+        <motion.div className="boundary-hero" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.42 }}>
           <span className="context-label">EPISTEMIC STOP</span>
           <h2>I CAN’T ESTABLISH THAT</h2>
           <p>Beacon mattered then. We never established whether that reason was sufficient on its own.</p>
@@ -238,39 +276,52 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
   );
 }
 
+async function loadPresentation() {
+  try {
+    const runtime = await fetch("/api/presentation", { cache: "no-store" });
+    if (!runtime.ok) throw new Error(`runtime API returned ${runtime.status}`);
+    return { view: await runtime.json(), source: "live" };
+  } catch (runtimeError) {
+    const fallback = await fetch("/demo-state.json", { cache: "no-store" });
+    if (!fallback.ok) throw runtimeError;
+    return { view: await fallback.json(), source: "fallback" };
+  }
+}
+
 function App() {
   const [view, setView] = useState(null);
+  const [source, setSource] = useState("loading");
   const [error, setError] = useState(null);
   const [phase, setPhase] = useState(0);
   const [boundaryRevealed, setBoundaryRevealed] = useState(false);
   const [proofOpen, setProofOpen] = useState(false);
 
   useEffect(() => {
-    fetch("/demo-state.json")
-      .then((r) => {
-        if (!r.ok) throw new Error("demo-state.json was not generated");
-        return r.json();
+    loadPresentation()
+      .then(({ view: nextView, source: nextSource }) => {
+        setView(nextView);
+        setSource(nextSource);
       })
-      .then(setView)
       .catch(setError);
   }, []);
 
   useEffect(() => {
     setBoundaryRevealed(false);
     if (phase === 4) {
-      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1450);
+      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1550);
       return () => window.clearTimeout(timer);
     }
     return undefined;
   }, [phase]);
 
   if (error) {
-    return <main className="boot"><h1>Decision Threads needs engine state.</h1><p>Run <code>npm run state</code> from apps/decision-threads, then reload.</p><pre>{String(error)}</pre></main>;
+    return <main className="boot"><h1>Decision Threads needs engine state.</h1><p>Cloud runtime and deterministic fallback both failed.</p><pre>{String(error)}</pre></main>;
   }
-  if (!view) return <main className="boot"><p>Loading frozen engine state…</p></main>;
+  if (!view) return <main className="boot"><p>Loading Decision Recall engine state…</p></main>;
 
   const copy = COPY[phase];
   const next = () => setPhase((p) => (p === 4 ? 0 : p + 1));
+  const live = source === "live";
 
   return (
     <main className={`app phase-${phase}`}>
@@ -281,18 +332,20 @@ function App() {
         </div>
         <div className="top-actions">
           <button className="proof-button" onClick={() => setProofOpen((x) => !x)}>Why / Proof</button>
-          <div className="live-dot"><span /> engine-bound</div>
+          <div className={`live-dot ${live ? "live" : "fallback"}`}><span />{live ? "Cloud Run · live engine" : "deterministic fallback"}</div>
         </div>
       </header>
 
       <section className="experience">
         <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} />
 
-        <motion.aside className="scene-note" key={phase} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.3 }}>
-          <span>{copy.eyebrow}</span>
-          <h1>{copy.title}</h1>
-          <p>{copy.body}</p>
-        </motion.aside>
+        {!(phase === 4 && boundaryRevealed) && (
+          <motion.aside className="scene-note" key={phase} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.3 }}>
+            <span>{copy.eyebrow}</span>
+            <h1>{copy.title}</h1>
+            <p>{copy.body}</p>
+          </motion.aside>
+        )}
 
         <div className="scene-index"><b>0{phase + 1}</b><span>/05</span></div>
 
@@ -306,8 +359,9 @@ function App() {
           <motion.aside className="proof-drawer" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", stiffness: 260, damping: 28 }}>
             <button className="proof-close" onClick={() => setProofOpen(false)}>×</button>
             <span className="drawer-eyebrow">ENGINE-BOUND PROOF</span>
-            <h3>Rendered from frozen engine state.</h3>
+            <h3>{live ? "Rendered from the live Cloud Run engine." : "Rendered from deterministic fallback state."}</h3>
             <dl>
+              <div><dt>Presentation source</dt><dd>{live ? "Cloud Run /api/presentation" : "demo-state.json fallback"}</dd></div>
               <div><dt>Capture relation</dt><dd>{view.capture.relation_id}</dd></div>
               <div><dt>Knowledge state</dt><dd>{view.capture.knowledge_state}</dd></div>
               <div><dt>Reuse result</dt><dd>{view.reuse_boundary.safe_reuse_result}</dd></div>
