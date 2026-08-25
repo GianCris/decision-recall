@@ -1,3 +1,5 @@
+import { applyProofPayload, liveCaptureGateModel } from "./proof-panel-state.js";
+
 const GEMINI_EVIDENCE_URL = "/proof/pc2-credentialed-release-evidence.json";
 
 const proofState = {
@@ -31,9 +33,7 @@ window.fetch = async (...args) => {
 
   if (["/api/capture-preparation", "/api/capture", "/demo-state.json"].includes(path)) {
     response.clone().json().then((payload) => {
-      if (path === "/api/capture-preparation" && response.ok) proofState.preparation = payload;
-      if (path === "/api/capture" && response.ok) proofState.captureEnvelope = payload;
-      if (path === "/demo-state.json" && response.ok) proofState.replayPresentation = payload;
+      applyProofPayload(proofState, path, response.ok, payload);
       emitProofUpdate();
     }).catch(() => {});
   }
@@ -135,8 +135,6 @@ function modeSummary(live) {
 
 function renderCaptureGate(phase, live) {
   const prep = proofState.preparation;
-  const validation = captureValidation();
-  const view = presentation();
   const captured = phase >= 2;
 
   if (!live) {
@@ -151,18 +149,24 @@ function renderCaptureGate(phase, live) {
       </section>`;
   }
 
+  const gate = liveCaptureGateModel({
+    phase,
+    preparation: prep,
+    captureEnvelope: proofState.captureEnvelope,
+  });
+
   return `
     <section class="proof-v2-section">
-      <div class="proof-v2-section-head"><span>01</span><div><b>Capture Gate</b><small>Server-authoritative binding</small></div>${statusPill(captured && validation ? "VERIFIED" : "ISSUED", captured && validation ? "green" : "blue")}</div>
+      <div class="proof-v2-section-head"><span>01</span><div><b>Capture Gate</b><small>Server-authoritative binding</small></div>${statusPill(gate.validation ? "VERIFIED" : "ISSUED", gate.validation ? "green" : "blue")}</div>
       <p class="proof-v2-explain">The browser may answer the question, but it cannot grant historical authority. Cloud Run rechecks the issued capture binding first.</p>
       <div class="proof-v2-rows">
         ${proofRow("Runtime", "Cloud Run · live engine", "green")}
-        ${proofRow("Issued gap", prep?.gap_id || view?.capture?.relation_id || "R2")}
-        ${proofRow("Pre-capture knowledge", prep?.knowledge_state || "not_durably_recorded", "amber")}
-        ${prep?.question_hash ? proofRow("Question binding", truncate(prep.question_hash, 22), "neutral", true) : ""}
-        ${validation ? proofRow("Human response", `${String(validation.answer).toUpperCase()} · VERIFIED`, "green") : proofRow("Human response", "not verified yet", "amber")}
-        ${validation ? proofRow("Completion", String(validation.completion).toUpperCase(), "green") : ""}
-        ${captured ? proofRow("Historical role", view?.capture?.knowledge_state === "established" ? "R2 · ESTABLISHED" : humanize(view?.capture?.knowledge_state), view?.capture?.knowledge_state === "established" ? "green" : "amber") : ""}
+        ${proofRow("Issued gap", gate.issuedGap)}
+        ${proofRow("Pre-capture knowledge", gate.preCaptureKnowledge, "amber")}
+        ${gate.questionHash ? proofRow("Question binding", truncate(gate.questionHash, 22), "neutral", true) : ""}
+        ${proofRow("Human response", gate.humanResponse, gate.validation ? "green" : "amber")}
+        ${proofRow("Completion", gate.completion, gate.validation ? "green" : "amber")}
+        ${gate.historicalRole ? proofRow("Historical role", gate.historicalRole, "green") : ""}
       </div>
     </section>`;
 }
