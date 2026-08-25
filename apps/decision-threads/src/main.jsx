@@ -130,7 +130,6 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
   const apexEval = "M762 312 C850 278 918 238 1010 210";
   const beaconEval = "M762 352 C855 392 922 450 1010 500";
   const reuseApproach = "M1010 500 C1056 522 1082 548 1102 584";
-  const unsupportedEdge = "M1134 612 C1170 626 1200 634 1220 636";
 
   const showInspectPulses = phase === 1;
   const showCommitPulse = phase === 2;
@@ -244,7 +243,6 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           <motion.g initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <DrawPath d={reuseApproach} kind="authorized-reuse" delay={0.05} />
             <Gap x={1118} y={602} label="sufficiency" emphasis />
-            <motion.path d={unsupportedEdge} fill="none" className="thread unsupported" initial={{ opacity: 0 }} animate={{ opacity: boundaryRevealed ? 0.42 : 0.18 }} transition={{ duration: 0.35 }} />
             {showReusePulse && <Pulse d={reuseApproach} tone="amber" duration={1.15} stopAtEnd />}
             <motion.g animate={{ opacity: boundaryRevealed ? 0.72 : 0.34 }} transition={{ duration: 0.35 }}>
               <circle cx="1220" cy="636" r="30" className="reuse-destination" />
