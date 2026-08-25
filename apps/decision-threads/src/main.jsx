@@ -7,7 +7,7 @@ const COPY = {
   0: {
     eyebrow: "Initial decision",
     title: "A decision held in time.",
-    body: "Apex was unstable. Beacon needed about 10 weeks to restart, so D-104 kept both for six months.",
+    body: "Apex was unstable. Beacon needed about 10 weeks to restart. D-104 recorded a six-month keep-both decision.",
     action: "Inspect decision",
   },
   1: {
@@ -19,7 +19,7 @@ const COPY = {
   2: {
     eyebrow: "Human response verified",
     title: "The historical role is established.",
-    body: "Cloud Run accepted the response. R2 now connects Beacon’s recorded constraint to D-104.",
+    body: null,
     action: "Advance six weeks",
   },
   3: {
@@ -389,6 +389,14 @@ function App() {
   const copy = COPY[phase];
   const live = source === "live";
   const pending = captureStatus === "pending";
+  const phaseCopy = phase === 2
+    ? {
+        ...copy,
+        body: live
+          ? "Cloud Run verified the human response. R2 now connects Beacon’s recorded constraint to D-104."
+          : "The verified capture is being replayed. R2 connects Beacon’s recorded constraint to D-104.",
+      }
+    : copy;
 
   const submitLiveCapture = async () => {
     if (!live || !preparation || pending) return;
@@ -529,9 +537,9 @@ function App() {
 
         {!(phase === 4 && boundaryRevealed) && (
           <motion.aside className="scene-note" key={phase} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.3 }}>
-            <span>{copy.eyebrow}</span>
-            <h1>{copy.title}</h1>
-            <p>{copy.body}</p>
+            <span>{phaseCopy.eyebrow}</span>
+            <h1>{phaseCopy.title}</h1>
+            <p>{phaseCopy.body}</p>
           </motion.aside>
         )}
 
