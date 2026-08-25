@@ -1,0 +1,357 @@
+/*
+ * VWS visual engagement pass.
+ *
+ * This layer is deliberately presentation-only: it does not change Decision Recall
+ * semantics, authority, API behavior, or phase transitions. It strengthens visual
+ * attention, causal feedback, temporal continuity, and the final epistemic stop.
+ */
+
+:root {
+  --engage-ink: #0b0e14;
+  --engage-green: #0f9160;
+  --engage-green-bright: #24b77d;
+  --engage-amber: #c88512;
+  --engage-red: #d34c47;
+  --engage-blue: #315cff;
+  --engage-ease: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* --- Observatory depth: three perceptible planes without introducing 3D chrome. --- */
+.observatory {
+  isolation: isolate;
+  box-shadow:
+    0 42px 110px rgba(61, 49, 33, .15),
+    0 8px 28px rgba(61, 49, 33, .07),
+    inset 0 1px 0 rgba(255, 255, 255, .96);
+  transition: box-shadow .55s var(--engage-ease), background .55s var(--engage-ease);
+}
+
+.observatory::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: .72;
+  background:
+    radial-gradient(circle at 55% 46%, rgba(49, 92, 255, .045), transparent 23%),
+    radial-gradient(circle at 48% 56%, rgba(15, 145, 96, .04), transparent 33%);
+  transition: opacity .45s var(--engage-ease), filter .45s var(--engage-ease);
+}
+
+.decision-canvas,
+.time-axis,
+.scene-note,
+.context-card,
+.capture-gate-state,
+.boundary-hero,
+.scene-index,
+.primary {
+  transform: translateZ(0);
+}
+
+/* --- Stronger hierarchy: dormant information recedes, earned state carries color. --- */
+.plane-label,
+.node-status,
+.node-subtitle,
+.gap-label {
+  transition: opacity .38s var(--engage-ease), fill .38s var(--engage-ease);
+}
+
+.thread {
+  transition: opacity .38s var(--engage-ease), stroke-width .38s var(--engage-ease), filter .38s var(--engage-ease);
+}
+
+.node-core,
+.node-orbit,
+.node-inner-ring {
+  transition: stroke .38s var(--engage-ease), fill .38s var(--engage-ease), filter .38s var(--engage-ease), opacity .38s var(--engage-ease);
+}
+
+.instrument-node {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: filter .28s var(--engage-ease);
+}
+
+.instrument-node:hover {
+  filter: drop-shadow(0 11px 18px rgba(18, 21, 24, .13));
+}
+
+.instrument-node:hover .node-orbit {
+  stroke: rgba(49, 92, 255, .32);
+}
+
+/* D-104 is the observatory's anchor. It reacts to events but never loops noisily. */
+.node-core.decision {
+  filter:
+    drop-shadow(0 17px 23px rgba(15, 17, 22, .23))
+    drop-shadow(0 0 0 rgba(49, 92, 255, 0));
+}
+
+.app.phase-1 .node-core.decision {
+  animation: decision-awake 1.7s var(--engage-ease) 1;
+}
+
+.app.phase-2 .node-core.decision {
+  animation: decision-authorized 1.35s var(--engage-ease) 1;
+}
+
+@keyframes decision-awake {
+  0%, 100% { filter: drop-shadow(0 17px 23px rgba(15, 17, 22, .23)); }
+  46% { filter: drop-shadow(0 18px 25px rgba(15, 17, 22, .25)) drop-shadow(0 0 17px rgba(49, 92, 255, .24)); }
+}
+
+@keyframes decision-authorized {
+  0% { filter: drop-shadow(0 17px 23px rgba(15, 17, 22, .23)); }
+  48% { filter: drop-shadow(0 19px 27px rgba(15, 17, 22, .27)) drop-shadow(0 0 21px rgba(36, 183, 125, .48)); }
+  100% { filter: drop-shadow(0 17px 23px rgba(15, 17, 22, .23)) drop-shadow(0 0 8px rgba(36, 183, 125, .13)); }
+}
+
+/* --- Inspect: guide the eye toward the discovered boundary. --- */
+.app.phase-1 .observatory {
+  box-shadow:
+    0 44px 116px rgba(61, 49, 33, .15),
+    0 9px 32px rgba(61, 49, 33, .08),
+    inset 0 1px 0 rgba(255, 255, 255, .96);
+}
+
+.app.phase-1 .thread.history {
+  filter: drop-shadow(0 0 5px rgba(15, 145, 96, .13));
+}
+
+.app.phase-1 .thread.missing {
+  stroke-width: 4.2;
+  filter: drop-shadow(0 0 7px rgba(200, 133, 18, .26));
+}
+
+.app.phase-1 .gap-core {
+  filter: drop-shadow(0 0 21px rgba(200, 133, 18, .35));
+}
+
+/* Question must never visually survive into an established state. Motion's exit
+   animation can otherwise coexist briefly with the post-200 green edge. */
+.app.phase-2 .gap-question {
+  opacity: 0 !important;
+  transform: translateY(9px) scale(.985) !important;
+  transition: opacity .16s ease, transform .16s ease !important;
+  pointer-events: none !important;
+}
+
+/* --- Capture: verification becomes a clear causal event, not a generic toast. --- */
+.capture-gate-state {
+  overflow: hidden;
+}
+
+.capture-gate-state::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 999px;
+}
+
+.capture-gate-state.pending::before { background: var(--engage-amber); }
+.capture-gate-state.error::before { background: var(--engage-red); }
+.capture-gate-state.accepted::before { background: var(--engage-green); }
+
+.capture-gate-state.pending {
+  box-shadow: 0 20px 48px rgba(126, 89, 24, .15), 0 0 0 1px rgba(200, 133, 18, .04);
+}
+
+.capture-gate-state.pending::after {
+  content: "";
+  display: block;
+  height: 2px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--engage-amber), transparent);
+  transform: translateX(-65%);
+  animation: verification-scan 1.05s ease-in-out infinite;
+}
+
+.capture-gate-state.accepted {
+  box-shadow: 0 22px 52px rgba(20, 122, 80, .17), 0 0 28px rgba(36, 183, 125, .08);
+}
+
+.capture-gate-state.accepted b {
+  color: #0a7f52;
+}
+
+@keyframes verification-scan {
+  0% { transform: translateX(-70%); opacity: .35; }
+  50% { opacity: 1; }
+  100% { transform: translateX(70%); opacity: .35; }
+}
+
+.app.phase-2 .thread.history:not(.dim) {
+  filter: drop-shadow(0 0 6px rgba(15, 145, 96, .19));
+}
+
+.app.phase-2 .resolved-burst {
+  filter: drop-shadow(0 0 10px rgba(36, 183, 125, .32));
+}
+
+/* --- THEN -> NOW: a single temporal sweep crosses the same observatory. --- */
+.app.phase-3 .observatory::before {
+  opacity: 1;
+  background:
+    linear-gradient(90deg,
+      transparent 0%,
+      transparent 43%,
+      rgba(49, 92, 255, .025) 47%,
+      rgba(49, 92, 255, .16) 50%,
+      rgba(255,255,255,.42) 52%,
+      rgba(49, 92, 255, .025) 55%,
+      transparent 59%,
+      transparent 100%);
+  background-size: 240% 100%;
+  animation: temporal-sweep 1.15s var(--engage-ease) 1 both;
+}
+
+@keyframes temporal-sweep {
+  from { background-position: 110% 0; }
+  to { background-position: -80% 0; }
+}
+
+.app.phase-3 .thread.current-match {
+  filter: drop-shadow(0 0 5px rgba(15, 145, 96, .18));
+}
+
+.app.phase-3 .thread.current-mismatch {
+  filter: drop-shadow(0 0 5px rgba(211, 76, 71, .18));
+}
+
+/* --- Reuse: remove the textual spoiler. The graph must demonstrate the stop
+   before language names it. The scene note exists only pre-boundary-reveal,
+   so hiding it here produces deliberate visual silence rather than duplicate copy. --- */
+.app.phase-4 .scene-note {
+  opacity: 0 !important;
+  transform: translateX(-12px) !important;
+  pointer-events: none;
+}
+
+.observatory.phase-4:not(.boundary-revealed) .plane-label,
+.observatory.phase-4:not(.boundary-revealed) .node-status {
+  opacity: .48;
+}
+
+.observatory.phase-4:not(.boundary-revealed) .thread.history.dim,
+.observatory.phase-4:not(.boundary-revealed) .thread.current-match,
+.observatory.phase-4:not(.boundary-revealed) .thread.current-mismatch {
+  opacity: .48;
+}
+
+.observatory.phase-4:not(.boundary-revealed) .thread.authorized-reuse {
+  stroke-width: 4.8;
+  filter: drop-shadow(0 0 8px rgba(15, 145, 96, .22));
+}
+
+.observatory.phase-4:not(.boundary-revealed) .gap-core {
+  filter: drop-shadow(0 0 24px rgba(200, 133, 18, .42));
+}
+
+.observatory.phase-4:not(.boundary-revealed) .gap-ripple.emphasis.outer,
+.observatory.phase-4:not(.boundary-revealed) .gap-ripple.emphasis.inner {
+  animation-duration: 1.25s;
+}
+
+.observatory.phase-4.boundary-revealed::before {
+  opacity: .36;
+  filter: saturate(.72);
+}
+
+.observatory.phase-4.boundary-revealed .decision-canvas {
+  filter: saturate(.78) contrast(.98);
+  transition: filter .55s var(--engage-ease);
+}
+
+.observatory.phase-4.boundary-revealed .gap-core {
+  filter: drop-shadow(0 0 26px rgba(200, 133, 18, .48));
+}
+
+.boundary-hero {
+  box-shadow:
+    0 30px 74px rgba(111, 77, 20, .16),
+    0 0 0 1px rgba(200, 133, 18, .04),
+    inset 0 1px 0 rgba(255,255,255,.72);
+}
+
+/* --- Buttons: premium, tactile microinteraction without decorative motion. --- */
+.primary,
+.proof-button {
+  transition:
+    transform .22s var(--engage-ease),
+    box-shadow .22s var(--engage-ease),
+    background .22s ease,
+    border-color .22s ease,
+    opacity .22s ease;
+}
+
+.primary:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 34px rgba(15, 17, 22, .19);
+}
+
+.primary:not(:disabled):hover span {
+  transform: translateX(4px);
+}
+
+.primary:not(:disabled):active {
+  transform: translateY(0) scale(.985);
+  box-shadow: 0 8px 18px rgba(15, 17, 22, .14);
+}
+
+.primary span {
+  display: inline-block;
+  transition: transform .22s var(--engage-ease);
+}
+
+.proof-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,.72);
+  border-color: rgba(116, 103, 85, .38);
+  box-shadow: 0 9px 22px rgba(60, 50, 36, .08);
+}
+
+.live-dot.live {
+  box-shadow: 0 7px 20px rgba(15, 145, 96, .07);
+}
+
+/* Small screens keep hierarchy without clipping the main flow. */
+@media (max-width: 1100px) {
+  .capture-gate-state { right: 20px; }
+  .app.phase-4 .scene-note { display: none; }
+}
+
+/* Accessibility: preserve state changes, remove nonessential travel and scanning. */
+@media (prefers-reduced-motion: reduce) {
+  .app.phase-1 .node-core.decision,
+  .app.phase-2 .node-core.decision,
+  .app.phase-3 .observatory::before,
+  .capture-gate-state.pending::after,
+  .gap-ripple.emphasis.outer,
+  .gap-ripple.emphasis.inner {
+    animation: none !important;
+  }
+
+  .primary,
+  .proof-button,
+  .thread,
+  .node-core,
+  .node-orbit,
+  .node-inner-ring,
+  .plane-label,
+  .node-status,
+  .node-subtitle,
+  .gap-label {
+    transition-duration: .01ms !important;
+  }
+
+  .primary:not(:disabled):hover,
+  .proof-button:hover {
+    transform: none;
+  }
+}
