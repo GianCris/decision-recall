@@ -1,24 +1,11 @@
-const frozenGeminiEvidence = Object.freeze({
-  checkpoint: "PC2 · GeminiCandidateCompiler",
-  status: "FROZEN",
-  model: "gemini-3.7-flash",
-  project: "decision-recall-hackathon",
-  location: "global",
-  releaseOracle: "semantic_key + kind + source_id + exact_quote_hash",
-  semanticExecutions: "9 / 9",
-  failureCount: 0,
-  scenarios: [
-    ["Normal", "3 / 3"],
-    ["Paraphrase", "3 / 3"],
-    ["Document prompt injection", "3 / 3"],
-  ],
-  artifactSha256: "9D91A20D4C5D16C40C1C2B72AEB0956B929AC116906A5383662C74F29CF9E7E1",
-});
+const GEMINI_EVIDENCE_URL = "/proof/pc2-credentialed-release-evidence.json";
 
 const proofState = {
   preparation: null,
   captureEnvelope: null,
   replayPresentation: null,
+  geminiEvidence: null,
+  geminiEvidenceError: null,
   lastUpdatedAt: null,
 };
 
@@ -53,6 +40,31 @@ window.fetch = async (...args) => {
 
   return response;
 };
+
+async function loadGeminiEvidence() {
+  try {
+    const response = await originalFetch(GEMINI_EVIDENCE_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`manifest HTTP ${response.status}`);
+    const manifest = await response.json();
+
+    if (
+      !manifest
+      || typeof manifest !== "object"
+      || !manifest.semantic_gate
+      || !manifest.credentialed_artifact
+      || !manifest.model
+    ) {
+      throw new Error("manifest schema incomplete");
+    }
+
+    proofState.geminiEvidence = manifest;
+    proofState.geminiEvidenceError = null;
+  } catch (error) {
+    proofState.geminiEvidence = null;
+    proofState.geminiEvidenceError = error instanceof Error ? error.message : String(error);
+  }
+  emitProofUpdate();
+}
 
 function appPhase() {
   const app = document.querySelector("main.app");
@@ -198,8 +210,8 @@ function renderReplayIntegrity(phase) {
 
   return `
     <section class="proof-v2-section ${available ? "" : "muted-section"}">
-      <div class="proof-v2-section-head"><span>04</span><div><b>Replay integrity</b><small>Deterministic evaluation</small></div>${statusPill(available ? (equal ? "MATCH" : "MISMATCH") : "WAITING", available ? (equal ? "green" : "red") : "gray")}</div>
-      <p class="proof-v2-explain">The visible winner slice exposes evaluation and replay fingerprints so deterministic reconstruction can be checked rather than assumed.</p>
+      <div class="proof-v2-section-head"><span>04</span><div><b>Deterministic completion fingerprints</b><small>Evaluation = replay check</small></div>${statusPill(available ? (equal ? "MATCH" : "MISMATCH") : "WAITING", available ? (equal ? "green" : "red") : "gray")}</div>
+      <p class="proof-v2-explain">The winner completion exposes evaluation and replay fingerprints so deterministic reconstruction can be checked rather than attributed to the final Replay button.</p>
       ${available ? `<div class="proof-v2-rows">
         ${proofRow("Evaluation hash", truncate(evaluationHash, 26), "neutral", true)}
         ${proofRow("Replay hash", truncate(replayHash, 26), "neutral", true)}
@@ -208,16 +220,62 @@ function renderReplayIntegrity(phase) {
     </section>`;
 }
 
+function geminiManifestView() {
+  const manifest = proofState.geminiEvidence;
+  if (!manifest) return null;
+
+  const gate = manifest.semantic_gate || {};
+  const observations = manifest.operational_observations || {};
+  const retryEntries = Object.entries(observations).filter(
+    ([name, value]) => name !== "interpretation"
+      && value
+      && typeof value === "object"
+      && Number(value.infra_attempt_count || 1) > 1,
+  );
+
+  return {
+    checkpoint: manifest.checkpoint || "PC2 · GeminiCandidateCompiler",
+    status: manifest.status || "UNKNOWN",
+    model: manifest.model || "—",
+    project: manifest.project || "—",
+    location: manifest.location || "—",
+    releaseOracle: manifest.release_oracle || "—",
+    semanticExecutions: `${gate.completed_semantic_executions ?? "—"} / ${gate.target_semantic_executions ?? "—"}`,
+    semanticFailures: gate.failure_count ?? "—",
+    passed: gate.passed === true,
+    scenarios: [
+      ["Normal", gate.normal || "—"],
+      ["Paraphrase", gate.paraphrase || "—"],
+      ["Document prompt injection", gate.document_prompt_injection || "—"],
+    ],
+    artifactSha256: manifest.credentialed_artifact?.sha256 || "—",
+    retryEntries,
+    interpretation: observations.interpretation || "",
+  };
+}
+
 function renderGeminiEvidence() {
-  const e = frozenGeminiEvidence;
+  const e = geminiManifestView();
+
+  if (!e) {
+    const failed = Boolean(proofState.geminiEvidenceError);
+    return `
+      <section class="proof-v2-section gemini-evidence ${failed ? "" : "muted-section"}">
+        <div class="proof-v2-section-head"><span>05</span><div><b>Gemini credentialed evidence</b><small>Committed PC2 release manifest</small></div>${statusPill(failed ? "UNAVAILABLE" : "LOADING", failed ? "red" : "gray")}</div>
+        <p class="proof-v2-explain">This surface reads the committed credentialed-release manifest; it does not duplicate Gemini results as frontend constants and does not present a live Gemini call from the hero interaction.</p>
+        <div class="proof-v2-dormant">${failed ? `Manifest could not be loaded: ${escapeHtml(proofState.geminiEvidenceError)}` : "Loading committed release evidence…"}</div>
+      </section>`;
+  }
+
   return `
     <section class="proof-v2-section gemini-evidence">
-      <div class="proof-v2-section-head"><span>05</span><div><b>Gemini credentialed evidence</b><small>${escapeHtml(e.checkpoint)}</small></div>${statusPill("9 / 9 PASS", "green")}</div>
-      <p class="proof-v2-explain">Frozen release evidence for the Gemini compiler gate. This is <b>not</b> presented as a live Gemini call from the hero interaction.</p>
+      <div class="proof-v2-section-head"><span>05</span><div><b>Gemini credentialed evidence</b><small>${escapeHtml(e.checkpoint)}</small></div>${statusPill(e.passed ? "MANIFEST PASS" : "MANIFEST FAIL", e.passed ? "green" : "red")}</div>
+      <p class="proof-v2-explain">Rendered from the committed PC2 credentialed-release manifest. This is <b>not</b> presented as a live Gemini call from the hero interaction.</p>
       <div class="proof-v2-metric-grid">
         <div><span>MODEL</span><b>${escapeHtml(e.model)}</b></div>
         <div><span>SEMANTIC EXECUTIONS</span><b>${escapeHtml(e.semanticExecutions)}</b></div>
-        <div><span>FAILURES</span><b>${escapeHtml(e.failureCount)}</b></div>
+        <div><span>SEMANTIC FAILURES</span><b>${escapeHtml(e.semanticFailures)}</b></div>
+        <div><span>INFRA RETRY CASES</span><b>${escapeHtml(e.retryEntries.length)}</b></div>
         <div><span>LOCATION</span><b>${escapeHtml(e.location)}</b></div>
       </div>
       <div class="proof-v2-scenarios">
@@ -226,11 +284,13 @@ function renderGeminiEvidence() {
       <details class="proof-v2-details">
         <summary>Release evidence details</summary>
         <div class="proof-v2-rows compact">
+          ${proofRow("Manifest status", e.status, e.passed ? "green" : "red")}
           ${proofRow("Project", e.project)}
           ${proofRow("Release oracle", e.releaseOracle)}
           ${proofRow("Artifact SHA-256", truncate(e.artifactSha256, 30), "neutral", true)}
+          ${e.retryEntries.map(([name, value]) => proofRow(`Infra retry · ${name}`, `${value.infra_attempt_count} attempts`, "amber")).join("")}
         </div>
-        <p>Two semantic executions required infrastructure retries before a final model response. The committed release manifest records them as infrastructure retries, not semantic retries.</p>
+        <p>${escapeHtml(e.interpretation || "Infrastructure retries are reported separately from semantic failures.")}</p>
       </details>
     </section>`;
 }
@@ -240,7 +300,7 @@ function renderClaimDiscipline() {
     <section class="proof-v2-section claim-discipline">
       <div class="proof-v2-section-head"><span>06</span><div><b>Claim discipline</b><small>What this demo does — and does not — establish</small></div>${statusPill("SCOPED", "blue")}</div>
       <div class="proof-v2-claim-grid">
-        <div class="proven"><span>THIS SURFACE DEMONSTRATES</span><p>One live golden slice: exact gap capture, server-bound human verification, temporal reevaluation, deterministic replay evidence, and an explicit reuse boundary.</p></div>
+        <div class="proven"><span>THE SUBMITTED SYSTEM DEMONSTRATES</span><p>One deployed golden slice: live Capture Gate verification, temporal reevaluation, deterministic replay evidence, and an explicit reuse boundary.</p></div>
         <div class="not-claimed"><span>NOT CLAIMED BY THIS DEMO</span><p>Baseline superiority, cross-domain generalization, enterprise-scale performance, or broad recovery superiority.</p></div>
       </div>
       <p class="proof-v2-footnote">A convincing animation never upgrades an experimental claim by itself.</p>
@@ -255,17 +315,46 @@ function visibleSnapshotText() {
   const view = presentation();
   const matches = Object.fromEntries((view?.current_matches || []).map((item) => [item.entity_id, item.state]));
   const boundary = view?.reuse_boundary;
+  const gemini = geminiManifestView();
+
   const lines = [
     "DECISION RECALL — PROOF SNAPSHOT",
     `mode: ${live ? "Cloud Run live engine" : "deterministic replay"}`,
     `phase: ${phase + 1}/5`,
     `R2 pre-capture: ${prep?.knowledge_state || "not_durably_recorded"}`,
   ];
-  if (phase >= 2) lines.push(`capture: ${validation ? `${validation.answer} / ${validation.status} / ${validation.completion}` : "verified replay"}`, `R2 current: ${view?.capture?.knowledge_state || "established"}`);
+
+  if (phase >= 2) {
+    lines.push(
+      `capture: ${validation ? `${validation.answer} / ${validation.status} / ${validation.completion}` : "verified replay"}`,
+      `R2 current: ${view?.capture?.knowledge_state || "established"}`,
+    );
+  }
+
   if (phase >= 3) lines.push(`M1: ${matches.M1 || "—"}`, `M2: ${matches.M2 || "—"}`);
-  if (phase >= 4 && boundary) lines.push(`boundary: ${(boundary.limiting_requirements || []).join(", ") || boundary.limiting_entity_id}`, `safe reuse: ${boundary.safe_reuse_result}`);
-  if (view?.evaluation_hash && view?.replay_hash) lines.push(`evaluation hash: ${view.evaluation_hash}`, `replay hash: ${view.replay_hash}`, `hashes equal: ${view.evaluation_hash === view.replay_hash}`);
-  lines.push("Gemini credentialed gate: 9/9 semantic executions; normal 3/3; paraphrase 3/3; document prompt injection 3/3.");
+  if (phase >= 4 && boundary) {
+    lines.push(
+      `boundary: ${(boundary.limiting_requirements || []).join(", ") || boundary.limiting_entity_id}`,
+      `safe reuse: ${boundary.safe_reuse_result}`,
+    );
+  }
+
+  if (view?.evaluation_hash && view?.replay_hash) {
+    lines.push(
+      `evaluation hash: ${view.evaluation_hash}`,
+      `replay hash: ${view.replay_hash}`,
+      `hashes equal: ${view.evaluation_hash === view.replay_hash}`,
+    );
+  }
+
+  if (gemini) {
+    lines.push(
+      `Gemini credentialed manifest: ${gemini.semanticExecutions} semantic executions; semantic failures ${gemini.semanticFailures}; infra retry cases ${gemini.retryEntries.length}; normal ${gemini.scenarios[0][1]}; paraphrase ${gemini.scenarios[1][1]}; document prompt injection ${gemini.scenarios[2][1]}.`,
+    );
+  } else {
+    lines.push("Gemini credentialed manifest: unavailable in this runtime.");
+  }
+
   return lines.join("\n");
 }
 
@@ -328,7 +417,9 @@ function refreshProof() {
     } catch {
       button.textContent = "Copy unavailable";
     }
-    window.setTimeout(() => { if (button.isConnected) button.textContent = "Copy current proof snapshot"; }, 1400);
+    window.setTimeout(() => {
+      if (button.isConnected) button.textContent = "Copy current proof snapshot";
+    }, 1400);
   });
 }
 
@@ -367,3 +458,5 @@ const rootObserver = new MutationObserver(() => {
   if (shell) refreshProof();
 });
 rootObserver.observe(document.getElementById("root"), { subtree: true, attributes: true, attributeFilter: ["class"] });
+
+loadGeminiEvidence();
