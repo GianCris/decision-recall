@@ -27,7 +27,7 @@ def build_runtime_presentation() -> dict[str, object]:
 
 
 class DecisionRecallHandler(BaseHTTPRequestHandler):
-    server_version = "DecisionRecallCloudRun/0.1"
+    server_version = "DecisionRecallCloudRun/0.2"
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -63,18 +63,24 @@ class DecisionRecallHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK.value)
         self.send_header("Content-Type", content_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache" if candidate.name == "index.html" else "public, max-age=3600")
+        self.send_header(
+            "Cache-Control",
+            "no-cache" if candidate.name == "index.html" else "public, max-age=3600",
+        )
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlparse(self.path).path
-        if path == "/healthz":
+
+        # Cloud Run reserves some paths ending in "z". /health is the public
+        # deployment-proof route; /healthz remains a harmless local alias.
+        if path in {"/health", "/healthz"}:
             self._send_json(
                 {
                     "status": "ok",
                     "service": "decision-recall",
-                    "runtime": "cloud-run-ready",
+                    "runtime": "cloud-run-live",
                 }
             )
             return
