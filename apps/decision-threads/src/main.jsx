@@ -5,21 +5,21 @@ import "./styles.css";
 
 const COPY = {
   0: {
-    eyebrow: "Original decision",
-    title: "Two suppliers. One decision.",
-    body: "Apex was unstable. Beacon took about 10 weeks to restart. The company kept access to both for six months.",
+    eyebrow: "Initial decision",
+    title: "A decision held in time.",
+    body: "Apex was unstable. Beacon needed about 10 weeks to restart, so D-104 kept both for six months.",
     action: "Inspect decision",
   },
   1: {
     eyebrow: "Gap discovered",
     title: "One relationship is missing.",
-    body: "The records show Beacon’s restart delay, but not whether keeping Beacon available actually mattered to the decision.",
+    body: "Beacon’s restart delay is recorded. Whether it materially influenced D-104 is not.",
     action: "Yes — verify human response",
   },
   2: {
-    eyebrow: "Server-authoritative capture",
-    title: "The historical role is now established.",
-    body: "Cloud Run verified the human response against the issued capture before the deterministic authority path established R2.",
+    eyebrow: "Human response verified",
+    title: "The historical role is established.",
+    body: "Cloud Run accepted the response. R2 now connects Beacon’s recorded constraint to D-104.",
     action: "Advance six weeks",
   },
   3: {
@@ -79,7 +79,29 @@ function Pulse({ d, tone = "green", duration = 1.15, delay: pulseDelay = 0, stop
 }
 
 function InstrumentNode({ x, y, title, subtitle, kind = "entity", status, active = true }) {
-  const radius = kind === "decision" ? 58 : 46;
+  const radius = kind === "decision" ? 92 : 46;
+  if (kind === "decision") {
+    return (
+      <motion.g
+        className="instrument-node decision decision-instrument"
+        initial={{ opacity: 0, scale: 0.92 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.48, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <circle cx={x} cy={y} r="142" className="decision-field" />
+        <circle cx={x} cy={y} r="116" className="decision-anchor-ring" />
+        <circle cx={x} cy={y} r={radius} className="node-core decision" />
+        <circle cx={x} cy={y} r="78" className="decision-core-ring" />
+        <text x={x} y={y - 42} textAnchor="middle" className="decision-kicker">DECISION CORE</text>
+        <text x={x} y={y + 1} textAnchor="middle" className="node-title decision">{title}</text>
+        <text x={x} y={y + 29} textAnchor="middle" className="node-subtitle decision">{subtitle}</text>
+        <text x={x} y={y + 54} textAnchor="middle" className="decision-recorded">RECORDED DECISION</text>
+        <circle cx={x - 114} cy={y - 36} r="7" className="relationship-port apex-port" />
+        <circle cx={x - 106} cy={y + 58} r="7" className="relationship-port beacon-port" />
+        <circle cx={x + 114} cy={y} r="7" className="relationship-port current-port" />
+      </motion.g>
+    );
+  }
   return (
     <motion.g
       className={`instrument-node ${kind} ${active ? "active" : "muted"}`}
@@ -123,12 +145,12 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
     [view],
   );
 
-  const apexToDecision = "M405 210 C500 212 555 280 620 318";
-  const beaconToGap = "M405 500 C500 500 540 430 590 390";
-  const gapToDecision = "M618 378 C635 362 646 348 658 338";
-  const beaconToDecision = "M405 500 C530 500 590 415 660 350";
-  const apexEval = "M762 312 C850 278 918 238 1010 210";
-  const beaconEval = "M762 352 C855 392 922 450 1010 500";
+  const apexToDecision = "M405 220 C505 220 548 280 596 324";
+  const beaconToGap = "M405 500 C490 500 528 445 565 420";
+  const gapToDecision = "M598 405 C612 396 620 390 626 381";
+  const beaconToDecision = "M405 500 C505 500 560 458 604 418";
+  const apexEval = "M824 360 C890 300 940 244 1010 220";
+  const beaconEval = "M824 360 C900 406 950 470 1010 500";
   const reuseApproach = "M1010 500 C1056 522 1082 548 1102 584";
 
   const showInspectPulses = phase === 1;
@@ -165,12 +187,12 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
         </defs>
 
         <text x="320" y="105" className="plane-label">OBSERVED WORLD</text>
-        <text x="620" y="105" className="plane-label">DECISION MEMORY</text>
-        {now && <motion.text x="995" y="105" className="plane-label" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>CURRENT WORLD</motion.text>}
+        <text x="675" y="105" className="plane-label decision-plane">DECISION MEMORY</text>
+        <text x="1010" y="105" className={`plane-label current-plane ${now ? "active" : "dormant"}`}>CURRENT WORLD</text>
 
         <InstrumentNode
           x={350}
-          y={210}
+          y={220}
           title="Apex"
           subtitle={now ? "98.7% on-time · 30d" : "delivery unstable"}
           kind="entity"
@@ -184,14 +206,22 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
           kind="entity"
           status={{ label: now ? "CURRENT EVIDENCE" : "OBSERVED AT T0", tone: now ? "green" : "neutral" }}
         />
-        <InstrumentNode x={720} y={335} title="D-104" subtitle="keep both · 6 months" kind="decision" status={{ label: "RECORDED DECISION", tone: "neutral" }} />
+        <InstrumentNode x={710} y={360} title="D-104" subtitle="keep both · 6 months" kind="decision" />
+
+        {!now && (
+          <g className="current-world-dormant">
+            <circle cx="1060" cy="360" r="96" className="dormant-world-field" />
+            <circle cx="1060" cy="360" r="10" className="dormant-world-anchor" />
+            <text x="1060" y="393" textAnchor="middle" className="dormant-world-copy">EVALUATION INACTIVE</text>
+          </g>
+        )}
 
         <DrawPath d={apexToDecision} kind="history" dim={now} />
 
         {gapDiscovered && (
           <>
             <DrawPath d={beaconToGap} kind="missing" delay={0.55} />
-            <Gap x={606} y={384} label="missing dependency" emphasis delay={0.72} />
+            <Gap x={582} y={412} label="R2 · MISSING DEPENDENCY" emphasis delay={0.72} />
             <DrawPath d={gapToDecision} kind="missing-faint" delay={0.78} />
           </>
         )}
@@ -205,11 +235,9 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
 
         {captureEstablished && (
           <>
-            <DrawPath d={beaconToDecision} kind="history" dim={now} delay={0.04} />
-            {phase === 2 && (
-              <motion.circle cx="606" cy="384" r="26" className="resolved-burst" initial={{ scale: 0, opacity: 0 }} animate={{ scale: [0, 1.9, 1], opacity: [0, 0.82, 0] }} transition={{ duration: 0.78 }} />
-            )}
-            {showCommitPulse && <Pulse d={beaconToDecision} duration={1.18} />}
+            <DrawPath d={beaconToDecision} kind="history beacon-history" dim={now} delay={phase === 2 ? 0.5 : 0.04} />
+            {phase === 2 && <motion.circle cx="604" cy="418" r="7" className="port-ack" initial={{ opacity: 0, scale: 0.4 }} animate={{ opacity: [0, 1, 0.72], scale: [0.4, 1.45, 1] }} transition={{ duration: 0.72, delay: 1.12 }} />}
+            {showCommitPulse && <Pulse d={beaconToDecision} duration={1.02} delay={0.5} />}
           </>
         )}
 
@@ -222,7 +250,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
 
             <InstrumentNode
               x={1060}
-              y={210}
+              y={220}
               title={labelForMatch("M1")}
               subtitle={humanizeMatch(matches.M1)}
               kind="signal"

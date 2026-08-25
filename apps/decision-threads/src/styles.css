@@ -11,8 +11,8 @@
   --amber: #b77914;
   --amber-soft: #fff1ce;
   --red: #c84a45;
-  --blue: #315cff;
-  --blue-soft: #e7ecff;
+  --blue: #1c315c;
+  --blue-soft: #e7eaf0;
 }
 
 * { box-sizing: border-box; }
@@ -195,8 +195,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .trace-pulse.red { fill: #fff7f6; stroke: var(--red); color: var(--red); }
 .trace-stop { fill: none; stroke-width: 2; }
 .trace-stop.green { stroke: var(--green); }.trace-stop.amber { stroke: var(--amber); }.trace-stop.red { stroke: var(--red); }
-.resolved-burst { fill: none; stroke: var(--green); stroke-width: 2.2; }
-
 .gap-ripple { fill: none; stroke: rgba(183,121,20,.3); }
 .gap-ripple.outer { stroke-width: 1; stroke-dasharray: 2 7; }
 .gap-ripple.inner { stroke-width: 1.2; }

@@ -12,7 +12,7 @@
   --engage-green-bright: #24b77d;
   --engage-amber: #c88512;
   --engage-red: #d34c47;
-  --engage-blue: #315cff;
+  --engage-blue: #1c315c;
   --engage-ease: cubic-bezier(.22, 1, .36, 1);
 }
 
@@ -190,10 +190,6 @@
   filter: drop-shadow(0 0 6px rgba(15, 145, 96, .19));
 }
 
-.app.phase-2 .resolved-burst {
-  filter: drop-shadow(0 0 10px rgba(36, 183, 125, .32));
-}
-
 /* --- THEN -> NOW: a single temporal sweep crosses the same observatory. --- */
 .app.phase-3 .observatory::before {
   opacity: 1;
@@ -354,4 +350,113 @@
   .proof-button:hover {
     transform: none;
   }
+}
+
+/* --- Final static-impact pass: a temporal instrument, not a node diagram. --- */
+.observatory {
+  background:
+    radial-gradient(circle at 56% 49%, rgba(255,255,255,.94) 0 14%, rgba(238,242,240,.52) 28%, rgba(255,252,245,.35) 48%, transparent 69%),
+    linear-gradient(145deg, rgba(255,255,255,.82), rgba(248,243,233,.67));
+}
+
+.observatory-grid {
+  opacity: .48;
+  background-image:
+    linear-gradient(rgba(28,49,92,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(28,49,92,.025) 1px, transparent 1px),
+    repeating-radial-gradient(circle at 57.25% 50%, transparent 0 54px, rgba(28,49,92,.055) 55px, transparent 56px 84px);
+  background-size: 40px 40px, 40px 40px, auto;
+  mask-image: radial-gradient(ellipse at 57% 50%, black 0 55%, transparent 88%);
+}
+
+.scene-note {
+  left: 30px;
+  top: 116px;
+  width: min(255px, 21vw);
+  padding: 0 20px 0 18px;
+  border-left-color: rgba(28,49,92,.76);
+  background: linear-gradient(90deg, rgba(248,244,236,.82), transparent);
+  backdrop-filter: blur(4px);
+}
+
+.scene-note > span { color: var(--engage-blue); }
+.scene-note h1 { max-width: 225px; font-size: clamp(25px, 1.9vw, 34px); }
+.scene-note p { max-width: 222px; font-size: 12px; line-height: 1.55; }
+
+.decision-instrument { transform-box: fill-box; transform-origin: center; }
+.decision-field {
+  fill: rgba(255,255,255,.1);
+  stroke: rgba(28,49,92,.13);
+  stroke-width: 1;
+  stroke-dasharray: 2 9;
+}
+.decision-anchor-ring {
+  fill: rgba(255,255,255,.3);
+  stroke: rgba(28,49,92,.24);
+  stroke-width: 1.5;
+  stroke-dasharray: 30 7 4 7;
+  filter: drop-shadow(0 15px 28px rgba(22,28,36,.11));
+}
+.decision-core-ring { fill: none; stroke: rgba(112,146,175,.62); stroke-width: 1; }
+.decision-kicker { fill: #9fa8b4; font: 800 7px "Manrope"; letter-spacing: .2em; }
+.decision-recorded { fill: #8f9aa7; font: 800 7px "Manrope"; letter-spacing: .14em; }
+.decision-instrument .node-title.decision { font-size: 31px; letter-spacing: -.04em; }
+.decision-instrument .node-subtitle.decision { fill: #eef1f3; font-size: 11px; }
+.decision-instrument .node-core.decision {
+  fill: url(#decisionFill);
+  stroke: rgba(191,202,211,.76);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 22px 32px rgba(12,18,28,.27));
+}
+.relationship-port {
+  fill: #f8f5ec;
+  stroke: #8995a3;
+  stroke-width: 3;
+  filter: drop-shadow(0 2px 5px rgba(14,18,24,.22));
+}
+.relationship-port.apex-port { stroke: var(--engage-green); }
+.app.phase-0 .relationship-port.beacon-port,
+.app.phase-1 .relationship-port.beacon-port { stroke: var(--engage-amber); }
+.app.phase-2 .relationship-port.beacon-port,
+.app.phase-3 .relationship-port.beacon-port,
+.app.phase-4 .relationship-port.beacon-port { stroke: var(--engage-green); }
+.relationship-port.current-port { stroke: #a3a7aa; }
+.app.phase-3 .relationship-port.current-port,
+.app.phase-4 .relationship-port.current-port { stroke: var(--engage-red); }
+.port-ack { fill: #f8fff9; stroke: var(--engage-green); stroke-width: 3; filter: drop-shadow(0 0 8px rgba(15,145,96,.42)); }
+
+.plane-label.decision-plane { fill: #1c315c; }
+.plane-label.current-plane { transition: opacity .4s ease, fill .4s ease; }
+.plane-label.current-plane.dormant { opacity: .34; fill: #777c7d; }
+.plane-label.current-plane.active { opacity: 1; fill: #4f5557; }
+.current-world-dormant { opacity: .42; }
+.dormant-world-field { fill: rgba(255,255,255,.12); stroke: rgba(112,116,116,.32); stroke-width: 1; stroke-dasharray: 3 8; }
+.dormant-world-anchor { fill: #f7f3ea; stroke: #a8aaa8; stroke-width: 2; }
+.dormant-world-copy { fill: #979a98; font: 700 8px "Manrope"; letter-spacing: .12em; }
+
+.thread.history { stroke-width: 3.2; }
+.thread.beacon-history { stroke-width: 4; }
+.thread.current-match,
+.thread.current-mismatch { stroke-width: 2.6; stroke-dasharray: 8 10; }
+.thread.current-match { opacity: .84; }
+.thread.current-mismatch { opacity: 1; }
+.thread.missing-faint { opacity: .46; }
+
+.app.phase-0 .gap-ripple,
+.app.phase-0 .gap-core,
+.app.phase-0 .gap-mark,
+.app.phase-0 .gap-label { visibility: hidden; }
+
+.gap-question { left: 39%; bottom: 88px; }
+.capture-gate-state { right: 28px; top: 104px; }
+
+.primary { min-width: 260px; }
+.primary:not(:disabled):hover { transform: translateX(-50%) translateY(-2px); }
+.primary:not(:disabled):active { transform: translateX(-50%) scale(.985); }
+
+@media (prefers-reduced-motion: reduce) {
+  .decision-instrument,
+  .relationship-port,
+  .port-ack,
+  .current-world-dormant { animation: none !important; transition-duration: .01ms !important; }
 }
