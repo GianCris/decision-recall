@@ -9,5 +9,6 @@ __pycache__
 .mypy_cache
 apps/decision-threads/node_modules
 apps/decision-threads/dist
-artifacts
+artifacts/*
+!artifacts/pc2-credentialed-release-evidence.json
 prototypes
