@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion } from "motion/react";
 import "./styles.css";
 import releaseEvidence from "./pc2-judge-safe-gemini-projection.json";
-import { AGENT_PROOF_DURATION_MS, agentProofVisibleForPhase } from "./agent-proof-state.js";
+import { AGENT_PROOF_DURATION_MS, AGENT_PROOF_REVEAL_SECONDS, agentProofVisibleForPhase } from "./agent-proof-state.js";
 
 const COPY = {
   0: {
@@ -137,7 +137,20 @@ function Gap({ x, y, label, emphasis = false, delay: gapDelay = 0 }) {
   );
 }
 
-function AgentProof({ live, view, onContinue }) {
+function ProofReveal({ delay, className, children }) {
+  return (
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.42, delay, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+function AgentProof({ live, view }) {
   const historical = releaseEvidence.candidates.find(
     (candidate) => candidate.semantic_key === "historical_support:apex_delivery_instability",
   );
@@ -155,42 +168,39 @@ function AgentProof({ live, view, onContinue }) {
       aria-label="Release-proven Gemini interpretation and live authority handoff"
     >
       <div className="agent-proof-release">
-        <div className="agent-proof-heading">
-          <span>RELEASE-PROVEN · D-104</span>
-          <strong>What the records say.</strong>
-          <small>Credentialed Gemini interpretation, preserved separately from the winner interaction.</small>
-        </div>
-        <div className="agent-proof-records">
+        <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.source} className="agent-proof-records">
+          <span>SOURCE RECORDS · D-104</span>
           <blockquote>“{historical.exact_quote}”</blockquote>
           <blockquote>“{beacon.exact_quote}”</blockquote>
-        </div>
-        <div className="agent-proof-gemini">
-          <span>GEMINI 3.7 FLASH</span>
-          <strong>Bounded interpretation</strong>
+        </ProofReveal>
+        <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.interpretation} className="agent-proof-gemini">
+          <span>GEMINI 3.7 FLASH · RELEASE-PROVEN</span>
           <p><i>✓</i> Apex instability influenced D-104</p>
-          <p><i>✓</i> Beacon restart delay is a known fact</p>
-        </div>
+          <p><i>✓</i> Beacon restart delay identified</p>
+        </ProofReveal>
       </div>
 
-      <div className="agent-proof-separator"><span>SAME D-104 SEMANTICS</span></div>
+      <div className="agent-proof-separator" />
 
       <div className="agent-proof-live">
-        <div>
+        <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.authority} className="agent-proof-authority">
           <span>{live ? "LIVE · CLOUD RUN" : "DETERMINISTIC REPLAY"}</span>
-          <strong>Interpretation is not authority.</strong>
-        </div>
-        <div className="authority-contrast">
+          <strong>INTERPRETATION ≠ AUTHORITY</strong>
+          <div className="authority-contrast">
           <p><span>FACT KNOWN</span><b>Beacon restart delay</b><i>✓</i></p>
           <em>≠</em>
           <p><span>HISTORICAL INFLUENCE</span><b>NOT ESTABLISHED</b><i>?</i></p>
-        </div>
+          </div>
+        </ProofReveal>
         <div className="agent-proof-gap">
+          <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.gap} className="agent-proof-gap-label">
           <span>ONE REQUIRED RELATION IS UNRESOLVED</span>
+          </ProofReveal>
+          <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.question} className="agent-proof-question">
           <strong>{view.capture.question}</strong>
-          <small>Decision Recall asks instead of inferring.</small>
+          </ProofReveal>
         </div>
       </div>
-      <button type="button" className="agent-proof-continue" onClick={onContinue}>Continue to clarification <span>→</span></button>
     </motion.section>
   );
 }
@@ -569,7 +579,7 @@ function App() {
   const showAgentProof = agentProofVisibleForPhase(phase, agentProofRequested);
 
   return (
-    <main className={`app phase-${phase}`}>
+    <main className={`app phase-${phase} ${showAgentProof ? "agent-proof-active" : ""}`}>
       <header className="topbar">
         <div className="brand-wrap">
           <div className="brand-mark">DR</div>
@@ -588,7 +598,7 @@ function App() {
 
         <AnimatePresence>
           {showAgentProof && (
-            <AgentProof live={live} view={view} onContinue={() => setAgentProofRequested(false)} />
+            <AgentProof live={live} view={view} />
           )}
         </AnimatePresence>
 

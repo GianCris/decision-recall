@@ -2,14 +2,21 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { AGENT_PROOF_DURATION_MS, agentProofPhaseModel } from "../src/agent-proof-state.js";
+import { AGENT_PROOF_DURATION_MS, AGENT_PROOF_REVEAL_SECONDS, agentProofPhaseModel } from "../src/agent-proof-state.js";
 
 const projection = JSON.parse(
   fs.readFileSync(new URL("../src/pc2-judge-safe-gemini-projection.json", import.meta.url), "utf8"),
 );
 
 test("release projection is brief, release-only, and never attributes R2 to Gemini", () => {
-  assert.ok(AGENT_PROOF_DURATION_MS >= 8000 && AGENT_PROOF_DURATION_MS <= 10000);
+  assert.ok(AGENT_PROOF_DURATION_MS >= 6500 && AGENT_PROOF_DURATION_MS <= 7000);
+  assert.deepEqual(AGENT_PROOF_REVEAL_SECONDS, {
+    source: 0,
+    interpretation: 1.4,
+    authority: 2.8,
+    gap: 4.4,
+    question: 5.5,
+  });
   assert.equal(projection.evidence_class, "release_proven_not_live_hero_request");
   assert.equal(projection.model, "gemini-3.7-flash");
   assert.deepEqual(
@@ -17,6 +24,17 @@ test("release projection is brief, release-only, and never attributes R2 to Gemi
     ["historical_support:apex_delivery_instability", "beacon_reactivation_delay"],
   );
   assert.doesNotMatch(JSON.stringify(projection), /R2/);
+});
+
+test("inspect autonomously reveals the proof without a second continue control", () => {
+  const source = fs.readFileSync(new URL("../src/main.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Continue to clarification/);
+  assert.doesNotMatch(source, /SAME D-104 SEMANTICS/);
+  assert.doesNotMatch(source, /Credentialed Gemini interpretation, preserved separately/);
+  assert.match(source, /GEMINI 3\.7 FLASH · RELEASE-PROVEN/);
+  assert.match(source, /ONE REQUIRED RELATION IS UNRESOLVED/);
+  assert.match(source, /view\.capture\.question/);
+  assert.match(source, /agent-proof-active/);
 });
 
 test("agent proof follows existing phase gates without future leakage", () => {

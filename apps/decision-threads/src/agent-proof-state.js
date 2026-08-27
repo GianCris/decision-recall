@@ -1,4 +1,12 @@
-export const AGENT_PROOF_DURATION_MS = 8600;
+export const AGENT_PROOF_DURATION_MS = 6900;
+
+export const AGENT_PROOF_REVEAL_SECONDS = Object.freeze({
+  source: 0,
+  interpretation: 1.4,
+  authority: 2.8,
+  gap: 4.4,
+  question: 5.5,
+});
 
 export function agentProofVisibleForPhase(phase, requestedVisible) {
   return phase === 1 && requestedVisible;
