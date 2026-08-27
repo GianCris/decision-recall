@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import timedelta, timezone, datetime
+from types import MappingProxyType
+from typing import Mapping
 
 from ..domain import (
     CompositionValue,
     DecisionContract,
     HistoricalKnowledgeState,
+    MetricSpec,
     NumericObservation,
     ProvenanceType,
     RelationCandidate,
     RelationType,
+    SafeReuseTargetSpec,
 )
 from ..golden import safe_reuse_target_v1, supplier_metric_specs, supplier_resilience_contract
 from ..m21 import (
@@ -41,7 +45,9 @@ from ..temporal import (
     LedgerEntryKind,
     PendingLedgerEntry,
     RawWorldEvidence,
+    EventPolicy,
     TemporalEvidenceRecord,
+    TemporalIntegrityError,
     TemporalReference,
     authority_policy_v1,
     event_policy_v1,
@@ -119,6 +125,43 @@ class GoldenCapturePreparation:
     known_fact_ids: frozenset[str]
     established_relation_ids: frozenset[str]
     critical_gaps: tuple[CriticalGap, ...]
+
+
+@dataclass(frozen=True)
+class GoldenT0Completion:
+    """Canonical post-capture state before any later-world evidence exists."""
+
+    preparation: GoldenCapturePreparation
+    registry: M21Registry
+    contract_artifact: CanonicalArtifact
+    target: SafeReuseTargetSpec
+    target_artifact: CanonicalArtifact
+    metric_specs: Mapping[str, MetricSpec]
+    world_schema_artifact: CanonicalArtifact
+    event_policy: EventPolicy
+    commit: StrongDecisionCommit
+    materialized_contract: DecisionContract
+    r2_candidate: RelationCandidate
+    r2_evidence_id: str
+    r2_authorization_id: str
+
+    @property
+    def ledger(self) -> InMemoryTemporalLedger:
+        return self.preparation.ledger
+
+    @property
+    def authority_policy(self):
+        return self.preparation.authority_policy
+
+
+@dataclass(frozen=True)
+class GoldenReevaluation:
+    """Canonical T1 result produced only after explicit later evidence is supplied."""
+
+    completion: GoldenT0Completion
+    evaluation: StrongEvaluationSnapshot
+    output: EvaluationSnapshot
+    replayed_result: CanonicalEvaluationResult
 
 
 def _golden_observable() -> ObservableDecisionBundle:
@@ -440,16 +483,13 @@ def _world_evidence(
     )
 
 
-def run_golden_decision(
+def complete_golden_capture(
+    preparation: GoldenCapturePreparation,
     *,
-    answer_r2: bool = True,
-    capture_answer: CaptureAnswer | None = None,
-    compiler: CandidateCompiler | None = None,
-) -> GoldenLoopResult:
-    """Trust-hardened winner loop: grounded t0 -> gap -> structured human authority -> strict replay -> C1."""
+    capture_answer: CaptureAnswer = CaptureAnswer.YES,
+) -> GoldenT0Completion:
+    """Complete verified human capture through T0, without creating future state."""
 
-    compiler = compiler or DeterministicGoldenCompiler()
-    preparation = prepare_golden_capture(compiler=compiler)
     profile = preparation.profile
     profile_artifact = preparation.profile_artifact
     assignment = preparation.assignment
@@ -470,8 +510,6 @@ def run_golden_decision(
     for artifact in (contract_artifact, target_artifact, schema_artifact):
         registry.add_artifact(artifact)
 
-    if capture_answer is None:
-        capture_answer = CaptureAnswer.YES if answer_r2 else CaptureAnswer.SKIP
     declaration = make_structured_capture_declaration(
         session=session,
         gap=gaps[0],
@@ -617,33 +655,92 @@ def run_golden_decision(
     if plan_questions(session=session, eligible_composition_ids=("C1",)) != ():
         raise RuntimeError("capture planner must not emit C1 after question budget is exhausted")
 
-    event_policy = event_policy_v1()
+    if materialized.composition("C1").value is not CompositionValue.NOT_DURABLY_RECORDED:
+        raise RuntimeError("C1 must remain unresolved at the T0 completion boundary")
+    forbidden_kinds = {
+        LedgerEntryKind.RAW_WORLD_EVIDENCE,
+        LedgerEntryKind.WORLD_EVENT_AUTHORIZATION,
+        LedgerEntryKind.EVALUATION,
+    }
+    if any(entry.kind in forbidden_kinds for entry in ledger.entries_as_of(ledger.head_seq)):
+        raise RuntimeError("T0 completion cannot contain later-world evidence or evaluation")
+    if commit.commit_cutoff_seq != ledger.head_seq:
+        raise RuntimeError("T0 completion must end exactly at the decision commit cutoff")
+
+    return GoldenT0Completion(
+        preparation=preparation,
+        registry=registry,
+        contract_artifact=contract_artifact,
+        target=target,
+        target_artifact=target_artifact,
+        metric_specs=MappingProxyType(metric_specs),
+        world_schema_artifact=schema_artifact,
+        event_policy=event_policy_v1(),
+        commit=commit,
+        materialized_contract=materialized,
+        r2_candidate=r2_candidate,
+        r2_evidence_id=r2_evidence.id,
+        r2_authorization_id=auth_ids[r2.id],
+    )
+
+
+def default_golden_later_world_evidence() -> tuple[RawWorldEvidence, ...]:
+    """Return the frozen D-104 later-world evidence used by the compatibility path."""
+
+    return (
+        _world_evidence("WE-BEACON-PRODUCT-V1", metric_key="beacon_reactivation_days", value=70, unit="days"),
+        _world_evidence(
+            "WE-E301-APEX-PRODUCT-V1",
+            metric_key="apex_on_time_rate",
+            value=0.987,
+            unit="ratio",
+            window_days=30,
+        ),
+    )
+
+
+def reevaluate_golden_decision(
+    completion: GoldenT0Completion,
+    *,
+    later_world_evidence: tuple[RawWorldEvidence, ...],
+    world_time: datetime,
+) -> GoldenReevaluation:
+    """Authorize explicit later-world evidence and strictly replay the committed decision."""
+
+    ledger = completion.ledger
+    registry = completion.registry
+    authority_policy = completion.authority_policy
+    event_policy = completion.event_policy
+    reevaluation_kinds = {
+        LedgerEntryKind.RAW_WORLD_EVIDENCE,
+        LedgerEntryKind.WORLD_EVENT_AUTHORIZATION,
+        LedgerEntryKind.EVALUATION,
+    }
+    if any(entry.kind in reevaluation_kinds for entry in ledger.entries_as_of(ledger.head_seq)):
+        raise TemporalIntegrityError("GoldenT0Completion has already entered reevaluation")
     event_policies = {(event_policy.version, event_policy.policy_hash): event_policy}
     world_entries: list[PendingLedgerEntry] = []
-    for raw in (
-        _world_evidence("WE-BEACON-PRODUCT-V1", metric_key="beacon_reactivation_days", value=70, unit="days"),
-        _world_evidence("WE-E301-APEX-PRODUCT-V1", metric_key="apex_on_time_rate", value=0.987, unit="ratio", window_days=30),
-    ):
-        auth = event_policy.authorize(raw=raw, metric_specs=metric_specs)
+    for raw in later_world_evidence:
+        auth = event_policy.authorize(raw=raw, metric_specs=completion.metric_specs)
         world_entries.extend(
             (
                 PendingLedgerEntry(LedgerEntryKind.RAW_WORLD_EVIDENCE, raw),
                 PendingLedgerEntry(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION, auth),
             )
         )
-    ledger.append_batch(recorded_at=T1, entries=tuple(world_entries))
+    ledger.append_batch(recorded_at=world_time, entries=tuple(world_entries))
 
     placeholder = CanonicalEvaluationResult("placeholder", (), (), (), ())
     draft_eval = StrongEvaluationSnapshot(
         evaluation_id=EVALUATION_ID,
-        decision_commit_id=commit.commit_id,
-        contract_hash=commit.contract_hash,
+        decision_commit_id=completion.commit.commit_id,
+        contract_hash=completion.commit.contract_hash,
         input_cutoff_seq=ledger.head_seq,
-        world_time=T1,
-        target_artifact_id=target_artifact.artifact_id,
-        target_hash=target_artifact.content_hash,
-        world_schema_artifact_id=schema_artifact.artifact_id,
-        world_schema_hash=schema_artifact.content_hash,
+        world_time=world_time,
+        target_artifact_id=completion.target_artifact.artifact_id,
+        target_hash=completion.target_artifact.content_hash,
+        world_schema_artifact_id=completion.world_schema_artifact.artifact_id,
+        world_schema_hash=completion.world_schema_artifact.content_hash,
         authority_policy_version=authority_policy.version,
         authority_policy_hash=authority_policy.policy_hash,
         event_policy_version=event_policy.version,
@@ -667,9 +764,9 @@ def run_golden_decision(
 
     output = EvaluationSnapshot(
         id=final_eval.evaluation_id,
-        decision_id=contract.id,
+        decision_id=completion.preparation.draft_contract.id,
         input_cutoff_seq=final_eval.input_cutoff_seq,
-        target_version=target.version,
+        target_version=completion.target.version,
         target_hash=final_eval.target_hash,
         evidence_policy_version=final_eval.authority_policy_version,
         evidence_policy_hash=final_eval.authority_policy_hash,
@@ -688,7 +785,7 @@ def run_golden_decision(
         canonicalization_version=final_eval.canonicalization_version,
     )
     ledger.append_batch(
-        recorded_at=T1 + timedelta(seconds=1),
+        recorded_at=world_time + timedelta(seconds=1),
         entries=(PendingLedgerEntry(LedgerEntryKind.EVALUATION, output),),
     )
     replayed = strict_verify_full_replay(
@@ -701,9 +798,28 @@ def run_golden_decision(
         engine_hash=ENGINE_HASH,
     )
 
+    return GoldenReevaluation(
+        completion=completion,
+        evaluation=final_eval,
+        output=output,
+        replayed_result=replayed,
+    )
+
+
+def _assemble_golden_loop_result(reevaluation: GoldenReevaluation) -> GoldenLoopResult:
+    completion = reevaluation.completion
+    preparation = completion.preparation
+    profile = preparation.profile
+    profile_artifact = preparation.profile_artifact
+    assignment = preparation.assignment
+    gaps = preparation.critical_gaps
+    commit = completion.commit
+    r2 = completion.materialized_contract.relation("R2")
+    c1 = completion.materialized_contract.composition("C1")
+    result = reevaluation.evaluation.canonical_result
+
     if result.limiting_requirements != ("C1",):
         raise RuntimeError("golden result must expose C1 as its exact limiting requirement")
-    c1 = materialized.composition("C1")
 
     return GoldenLoopResult(
         capture_profile=CaptureProfileView(
@@ -718,17 +834,17 @@ def run_golden_decision(
         ),
         critical_gaps=tuple(CriticalGapView(item.slot_id, item.question, item.selected_at) for item in gaps),
         r2_candidate=CandidateView(
-            candidate_id=r2_candidate.id,
-            relation_type=r2_candidate.relation_type.value,
-            subject_id=r2_candidate.subject_id,
-            object_id=r2_candidate.object_id,
-            evidence_refs=r2_candidate.evidence_refs,
+            candidate_id=completion.r2_candidate.id,
+            relation_type=completion.r2_candidate.relation_type.value,
+            subject_id=completion.r2_candidate.subject_id,
+            object_id=completion.r2_candidate.object_id,
+            evidence_refs=completion.r2_candidate.evidence_refs,
         ),
         r2_trace=RelationTraceView(
             entity_id=r2.id,
             knowledge_state=r2.knowledge_state.value,
             evidence_ids=r2.evidence_refs,
-            authorization_ids=(auth_ids[r2.id],),
+            authorization_ids=(completion.r2_authorization_id,),
             commit_id=commit.commit_id,
             commit_batch_seq=commit.commit_cutoff_seq,
         ),
@@ -745,8 +861,8 @@ def run_golden_decision(
             reason_codes=result.reason_codes,
             current_matches=result.current_matches,
             review_states=result.review_states,
-            evaluation_id=final_eval.evaluation_id,
-            result_hash=final_eval.result_hash,
+            evaluation_id=reevaluation.evaluation.evaluation_id,
+            result_hash=reevaluation.evaluation.result_hash,
         ),
         boundary=EpistemicBoundaryView(
             limiting_entity_id=c1.id,
@@ -756,5 +872,26 @@ def run_golden_decision(
             target_id=c1.target_ref.id,
             target_version=c1.target_ref.version,
         ),
-        replay_result_hash=replayed.result_hash(),
+        replay_result_hash=reevaluation.replayed_result.result_hash(),
     )
+
+
+def run_golden_decision(
+    *,
+    answer_r2: bool = True,
+    capture_answer: CaptureAnswer | None = None,
+    compiler: CandidateCompiler | None = None,
+) -> GoldenLoopResult:
+    """Compatibility composition: prepare -> T0 capture -> explicit frozen T1 replay."""
+
+    compiler = compiler or DeterministicGoldenCompiler()
+    preparation = prepare_golden_capture(compiler=compiler)
+    if capture_answer is None:
+        capture_answer = CaptureAnswer.YES if answer_r2 else CaptureAnswer.SKIP
+    completion = complete_golden_capture(preparation, capture_answer=capture_answer)
+    reevaluation = reevaluate_golden_decision(
+        completion,
+        later_world_evidence=default_golden_later_world_evidence(),
+        world_time=T1,
+    )
+    return _assemble_golden_loop_result(reevaluation)

@@ -1,10 +1,13 @@
 import inspect
+import hashlib
+import json
 import unittest
-from dataclasses import fields, replace
+from dataclasses import asdict, fields, replace
 from datetime import timedelta
 
-from decision_recall.domain import HistoricalKnowledgeState, ProvenanceType, RelationType
+from decision_recall.domain import CompositionValue, HistoricalKnowledgeState, ProvenanceType, RelationType
 from decision_recall.m21 import canonical_hash, canonical_json
+from decision_recall.m21_strict import strict_materialize_committed_contract
 from decision_recall.product import golden_loop as golden_loop_module
 from decision_recall.product.capture import (
     CaptureSessionState,
@@ -28,11 +31,154 @@ from decision_recall.product.compiler import (
     SemanticCandidateResolver,
     SourceDocument,
 )
-from decision_recall.product.golden_loop import T0, prepare_golden_capture, run_golden_decision
+from decision_recall.product.golden_loop import (
+    T0,
+    T1,
+    complete_golden_capture,
+    default_golden_later_world_evidence,
+    prepare_golden_capture,
+    reevaluate_golden_decision,
+    run_golden_decision,
+)
 from decision_recall.product.models import CandidateView
+from decision_recall.temporal import LedgerEntryKind, TemporalIntegrityError
 
 
 class ProductGoldenLoopTests(unittest.TestCase):
+    def test_complete_default_result_matches_independent_pre_refactor_fingerprint(self):
+        payload = json.dumps(
+            asdict(run_golden_decision()),
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode()
+
+        self.assertEqual(
+            hashlib.sha256(payload).hexdigest(),
+            "9d1c7bf5fb7accf6f1b2c4cd143c11324e31d15dda79dcf640f1b3e46d5db463",
+        )
+
+    def test_t0_completion_has_established_r2_but_no_future_state(self):
+        completion = complete_golden_capture(prepare_golden_capture())
+        kinds = tuple(
+            entry.kind
+            for entry in completion.ledger.entries_as_of(completion.ledger.head_seq)
+        )
+
+        self.assertEqual(
+            completion.materialized_contract.relation("R2").knowledge_state,
+            HistoricalKnowledgeState.ESTABLISHED,
+        )
+        self.assertEqual(
+            completion.materialized_contract.composition("C1").value,
+            CompositionValue.NOT_DURABLY_RECORDED,
+        )
+        self.assertNotIn(LedgerEntryKind.RAW_WORLD_EVIDENCE, kinds)
+        self.assertNotIn(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION, kinds)
+        self.assertNotIn(LedgerEntryKind.EVALUATION, kinds)
+        self.assertEqual(completion.commit.commit_cutoff_seq, completion.ledger.head_seq)
+        commit_entries = tuple(
+            entry
+            for entry in completion.ledger.entries_as_of(completion.ledger.head_seq)
+            if entry.kind is LedgerEntryKind.DECISION_COMMIT
+        )
+        self.assertEqual(len(commit_entries), 1)
+        self.assertEqual(commit_entries[0].recorded_at, T0)
+        self.assertFalse(hasattr(completion, "current_matches"))
+        self.assertFalse(hasattr(completion, "safe_reuse_result"))
+
+    def test_t0_completion_strictly_rematerializes_same_historical_state(self):
+        completion = complete_golden_capture(prepare_golden_capture())
+        replayed = strict_materialize_committed_contract(
+            registry=completion.registry,
+            ledger=completion.ledger,
+            commit=completion.commit,
+            authority_policy=completion.authority_policy,
+            target=completion.target,
+        )
+
+        self.assertEqual(replayed, completion.materialized_contract)
+        self.assertEqual(
+            replayed.relation("R2").knowledge_state,
+            HistoricalKnowledgeState.ESTABLISHED,
+        )
+        self.assertEqual(
+            replayed.composition("C1").value,
+            CompositionValue.NOT_DURABLY_RECORDED,
+        )
+
+    def test_explicit_reevaluation_adds_frozen_t1_and_reproduces_winner_result(self):
+        completion = complete_golden_capture(prepare_golden_capture())
+        before = tuple(
+            entry.kind
+            for entry in completion.ledger.entries_as_of(completion.ledger.head_seq)
+        )
+        reevaluation = reevaluate_golden_decision(
+            completion,
+            later_world_evidence=default_golden_later_world_evidence(),
+            world_time=T1,
+        )
+        after = tuple(
+            entry.kind
+            for entry in completion.ledger.entries_as_of(completion.ledger.head_seq)
+        )
+
+        self.assertNotIn(LedgerEntryKind.RAW_WORLD_EVIDENCE, before)
+        self.assertNotIn(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION, before)
+        self.assertNotIn(LedgerEntryKind.EVALUATION, before)
+        self.assertEqual(after.count(LedgerEntryKind.RAW_WORLD_EVIDENCE), 2)
+        self.assertEqual(after.count(LedgerEntryKind.WORLD_EVENT_AUTHORIZATION), 2)
+        self.assertEqual(after.count(LedgerEntryKind.EVALUATION), 1)
+        self.assertEqual(
+            dict(reevaluation.evaluation.canonical_result.current_matches),
+            {"M1": "does_not_match", "M2": "matches"},
+        )
+        self.assertEqual(
+            reevaluation.evaluation.canonical_result.safe_reuse_result,
+            "insufficient_evidence",
+        )
+        self.assertEqual(
+            reevaluation.evaluation.canonical_result.limiting_requirements,
+            ("C1",),
+        )
+        self.assertEqual(
+            reevaluation.replayed_result.result_hash(),
+            reevaluation.evaluation.result_hash,
+        )
+
+    def test_reevaluation_is_explicitly_one_shot_without_rejected_call_mutation(self):
+        completion = complete_golden_capture(prepare_golden_capture())
+        evidence = default_golden_later_world_evidence()
+        reevaluate_golden_decision(
+            completion,
+            later_world_evidence=evidence,
+            world_time=T1,
+        )
+        head_after_first = completion.ledger.head_seq
+
+        with self.assertRaisesRegex(
+            TemporalIntegrityError,
+            "GoldenT0Completion has already entered reevaluation",
+        ):
+            reevaluate_golden_decision(
+                completion,
+                later_world_evidence=evidence,
+                world_time=T1,
+            )
+
+        self.assertEqual(completion.ledger.head_seq, head_after_first)
+
+    def test_compatibility_wrapper_equals_explicit_new_composition(self):
+        completion = complete_golden_capture(prepare_golden_capture())
+        reevaluation = reevaluate_golden_decision(
+            completion,
+            later_world_evidence=default_golden_later_world_evidence(),
+            world_time=T1,
+        )
+        explicit = golden_loop_module._assemble_golden_loop_result(reevaluation)
+
+        self.assertEqual(asdict(explicit), asdict(run_golden_decision()))
+
     def test_checkpoint_1_runs_end_to_end_with_strict_replay(self):
         result = run_golden_decision()
 
