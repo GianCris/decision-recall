@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion } from "motion/react";
 import "./styles.css";
+import releaseEvidence from "./pc2-judge-safe-gemini-projection.json";
+import { AGENT_PROOF_DURATION_MS, agentProofVisibleForPhase } from "./agent-proof-state.js";
 
 const COPY = {
   0: {
@@ -132,6 +134,64 @@ function Gap({ x, y, label, emphasis = false, delay: gapDelay = 0 }) {
       <text x={x} y={y + 7} textAnchor="middle" className="gap-mark">?</text>
       {label && <text x={x} y={y + (emphasis ? 58 : 48)} textAnchor="middle" className="gap-label">{label}</text>}
     </motion.g>
+  );
+}
+
+function AgentProof({ live, view, onContinue }) {
+  const historical = releaseEvidence.candidates.find(
+    (candidate) => candidate.semantic_key === "historical_support:apex_delivery_instability",
+  );
+  const beacon = releaseEvidence.candidates.find(
+    (candidate) => candidate.semantic_key === "beacon_reactivation_delay",
+  );
+
+  return (
+    <motion.section
+      className="agent-proof"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.36 }}
+      aria-label="Release-proven Gemini interpretation and live authority handoff"
+    >
+      <div className="agent-proof-release">
+        <div className="agent-proof-heading">
+          <span>RELEASE-PROVEN · D-104</span>
+          <strong>What the records say.</strong>
+          <small>Credentialed Gemini interpretation, preserved separately from the winner interaction.</small>
+        </div>
+        <div className="agent-proof-records">
+          <blockquote>“{historical.exact_quote}”</blockquote>
+          <blockquote>“{beacon.exact_quote}”</blockquote>
+        </div>
+        <div className="agent-proof-gemini">
+          <span>GEMINI 3.7 FLASH</span>
+          <strong>Bounded interpretation</strong>
+          <p><i>✓</i> Apex instability influenced D-104</p>
+          <p><i>✓</i> Beacon restart delay is a known fact</p>
+        </div>
+      </div>
+
+      <div className="agent-proof-separator"><span>SAME D-104 SEMANTICS</span></div>
+
+      <div className="agent-proof-live">
+        <div>
+          <span>{live ? "LIVE · CLOUD RUN" : "DETERMINISTIC REPLAY"}</span>
+          <strong>Interpretation is not authority.</strong>
+        </div>
+        <div className="authority-contrast">
+          <p><span>FACT KNOWN</span><b>Beacon restart delay</b><i>✓</i></p>
+          <em>≠</em>
+          <p><span>HISTORICAL INFLUENCE</span><b>NOT ESTABLISHED</b><i>?</i></p>
+        </div>
+        <div className="agent-proof-gap">
+          <span>ONE REQUIRED RELATION IS UNRESOLVED</span>
+          <strong>{view.capture.question}</strong>
+          <small>Decision Recall asks instead of inferring.</small>
+        </div>
+      </div>
+      <button type="button" className="agent-proof-continue" onClick={onContinue}>Continue to clarification <span>→</span></button>
+    </motion.section>
   );
 }
 
@@ -300,7 +360,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
 
       {phase === 4 && boundaryRevealed && view.reuse_boundary && (
         <motion.div className="boundary-hero" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.42 }}>
-          <span className="context-label">EPISTEMIC STOP</span>
+          <span className="context-label">REUSE SUFFICIENCY · NEVER ESTABLISHED</span>
           <h2>I CAN’T ESTABLISH THAT</h2>
           <p>Beacon mattered then. We never established whether that reason was sufficient on its own.</p>
           <div className="boundary-status">{view.reuse_boundary.safe_reuse_result.replaceAll("_", " ")}</div>
@@ -358,6 +418,7 @@ function App() {
   const [captureStatus, setCaptureStatus] = useState("idle");
   const [captureError, setCaptureError] = useState(null);
   const [captureValidation, setCaptureValidation] = useState(null);
+  const [agentProofRequested, setAgentProofRequested] = useState(false);
 
   const applyInitialState = ({ preparation: nextPreparation, view: nextView, source: nextSource }) => {
     setPreparation(nextPreparation);
@@ -379,6 +440,16 @@ function App() {
       return () => window.clearTimeout(timer);
     }
     return undefined;
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== 1) {
+      setAgentProofRequested(false);
+      return undefined;
+    }
+    setAgentProofRequested(true);
+    const timer = window.setTimeout(() => setAgentProofRequested(false), AGENT_PROOF_DURATION_MS);
+    return () => window.clearTimeout(timer);
   }, [phase]);
 
   if (error) {
@@ -495,6 +566,7 @@ function App() {
     : copy.action;
 
   const boundary = view.reuse_boundary;
+  const showAgentProof = agentProofVisibleForPhase(phase, agentProofRequested);
 
   return (
     <main className={`app phase-${phase}`}>
@@ -514,6 +586,12 @@ function App() {
       <section className="experience">
         <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} />
 
+        <AnimatePresence>
+          {showAgentProof && (
+            <AgentProof live={live} view={view} onContinue={() => setAgentProofRequested(false)} />
+          )}
+        </AnimatePresence>
+
         {phase === 1 && live && pending && (
           <motion.div className="capture-gate-state pending" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
             <b>VERIFYING WITH CLOUD RUN…</b>
@@ -530,8 +608,9 @@ function App() {
 
         {phase === 2 && live && captureValidation && (
           <motion.div className="capture-gate-state accepted" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.3 }}>
-            <b>HUMAN RESPONSE · VERIFIED</b>
-            <span>R2 · HISTORICAL ROLE ESTABLISHED</span>
+            <b>SERVER VERIFIED</b>
+            <span className="capture-state-change"><s>NOT ESTABLISHED</s><i>→</i><strong>ESTABLISHED</strong></span>
+            <small>Response binding matched · completion permitted</small>
           </motion.div>
         )}
 
@@ -545,7 +624,7 @@ function App() {
 
         <div className="scene-index"><b>0{phase + 1}</b><span>/05</span></div>
 
-        <button onClick={next} disabled={pending} className={`primary ${phase === 4 ? "replay" : ""} ${pending ? "pending" : ""}`}>
+        <button onClick={next} disabled={pending || showAgentProof} className={`primary ${phase === 4 ? "replay" : ""} ${pending ? "pending" : ""}`}>
           {actionLabel}<span>→</span>
         </button>
       </section>

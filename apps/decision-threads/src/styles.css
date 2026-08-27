@@ -277,6 +277,116 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   border: 1px solid rgba(24,132,86,.28);
   background: rgba(236,249,241,.94);
 }
+.capture-gate-state.accepted small { display: block; margin-top: 7px; color: #597269; font-size: 9px; }
+.capture-state-change { display: flex !important; align-items: center; gap: 8px; margin-top: 8px !important; }
+.capture-state-change s { color: #8d948f; font: 700 9px "Manrope"; text-decoration-thickness: 1px; }
+.capture-state-change i { color: #839089; font-style: normal; }
+.capture-state-change strong { color: var(--green); font: 800 10px "Manrope"; letter-spacing: .08em; }
+
+.agent-proof {
+  position: absolute;
+  z-index: 18;
+  left: 50%;
+  top: 50%;
+  width: min(1120px, calc(100% - 90px));
+  min-height: 480px;
+  translate: -50% -50%;
+  border: 1px solid rgba(139,127,108,.3);
+  border-radius: 30px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255,255,255,.96), transparent 38%),
+    linear-gradient(135deg, rgba(250,247,239,.99), rgba(242,237,227,.98));
+  box-shadow: 0 36px 100px rgba(48,39,28,.22), inset 0 1px 0 rgba(255,255,255,.92);
+  backdrop-filter: blur(24px);
+}
+.agent-proof-release {
+  display: grid;
+  grid-template-columns: .86fr 1.12fr 1fr;
+  gap: 25px;
+  min-height: 210px;
+  padding: 29px 32px 26px;
+}
+.agent-proof-heading,
+.agent-proof-gemini { display: flex; flex-direction: column; }
+.agent-proof-heading > span,
+.agent-proof-gemini > span,
+.agent-proof-live > div:first-child > span,
+.agent-proof-gap > span {
+  color: var(--blue);
+  font: 800 9px/1.2 "Manrope";
+  letter-spacing: .15em;
+}
+.agent-proof-heading > strong { margin-top: 13px; font: 800 26px/1.02 "Manrope"; letter-spacing: -.045em; }
+.agent-proof-heading > small { margin-top: 11px; max-width: 235px; color: #777973; font-size: 10px; line-height: 1.5; }
+.agent-proof-records { display: grid; gap: 9px; align-content: center; }
+.agent-proof-records blockquote {
+  margin: 0;
+  padding: 12px 15px;
+  border-left: 2px solid rgba(35,54,94,.38);
+  background: rgba(255,255,255,.5);
+  color: #454947;
+  font-size: 11px;
+  line-height: 1.42;
+}
+.agent-proof-gemini {
+  align-self: center;
+  padding: 17px 18px;
+  border: 1px solid rgba(31,52,95,.18);
+  border-radius: 19px;
+  background: rgba(232,235,241,.54);
+}
+.agent-proof-gemini > strong { margin: 8px 0 9px; font: 800 17px/1.15 "Manrope"; }
+.agent-proof-gemini p { display: flex; gap: 8px; margin: 5px 0 0; color: #525856; font-size: 10px; line-height: 1.3; }
+.agent-proof-gemini i { color: var(--green); font-style: normal; font-weight: 800; }
+.agent-proof-separator { position: relative; height: 1px; margin: 0 32px; background: rgba(131,119,100,.22); }
+.agent-proof-separator span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0 11px;
+  background: #f4efe5;
+  color: #8e8d85;
+  font: 800 8px/1 "Manrope";
+  letter-spacing: .14em;
+}
+.agent-proof-live {
+  display: grid;
+  grid-template-columns: .8fr 1.2fr 1.25fr;
+  align-items: center;
+  gap: 24px;
+  min-height: 205px;
+  padding: 26px 32px 35px;
+}
+.agent-proof-live > div:first-child > span { color: var(--green); }
+.agent-proof-live > div:first-child > strong { display: block; margin-top: 10px; font: 800 21px/1.06 "Manrope"; letter-spacing: -.035em; }
+.authority-contrast { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 11px; }
+.authority-contrast p { position: relative; min-height: 74px; margin: 0; padding: 12px 25px 12px 13px; border: 1px solid rgba(129,120,105,.22); border-radius: 15px; background: rgba(255,255,255,.52); }
+.authority-contrast p > span { display: block; color: #858881; font: 800 7px/1 "Manrope"; letter-spacing: .13em; }
+.authority-contrast p b { display: block; margin-top: 8px; font: 750 10px/1.25 "Manrope"; }
+.authority-contrast p i { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--green); font: 800 15px "Manrope"; font-style: normal; }
+.authority-contrast p:last-child { border-color: rgba(183,121,20,.27); background: rgba(255,246,221,.55); }
+.authority-contrast p:last-child i, .authority-contrast p:last-child b { color: var(--amber); }
+.authority-contrast > em { color: #8f918c; font: 800 20px "Manrope"; font-style: normal; }
+.agent-proof-gap { padding-left: 18px; border-left: 1px solid rgba(183,121,20,.28); }
+.agent-proof-gap > span { color: var(--amber); }
+.agent-proof-gap > strong { display: block; margin-top: 9px; font: 700 12px/1.4 "Manrope"; }
+.agent-proof-gap > small { display: block; margin-top: 8px; color: #80745e; font-size: 9px; }
+.agent-proof-continue {
+  position: absolute;
+  right: 24px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: #686b66;
+  cursor: pointer;
+  font: 700 10px "Manrope";
+}
+.agent-proof-continue:hover { color: var(--ink); }
 
 .boundary-hero {
   position: absolute;
@@ -367,6 +477,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .scene-note { width: 215px; }
   .gap-question { left: 42%; width: 360px; }
   .capture-gate-state { right: 24px; width: 270px; }
+  .agent-proof { width: 830px; }
+  .agent-proof-release { grid-template-columns: .8fr 1.1fr 1fr; gap: 16px; padding-inline: 24px; }
+  .agent-proof-live { grid-template-columns: .72fr 1.18fr 1.15fr; gap: 15px; padding-inline: 24px; }
 }
 
 @media (max-width: 720px) {

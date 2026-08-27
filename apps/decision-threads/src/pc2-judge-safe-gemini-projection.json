@@ -1,0 +1,34 @@
+{
+  "projection_version": "PC2_JUDGE_SAFE_GEMINI_PROJECTION_V1",
+  "evidence_class": "release_proven_not_live_hero_request",
+  "model": "gemini-3.7-flash",
+  "producer_head_sha": "fe5b8622fa82844d208837418bede0a8ecb24405",
+  "producer_probe_version": "PC2_LIVE_GEMINI_V4_STRICT_INFRA_CLASSIFICATION",
+  "raw_artifact_sha256": "9D91A20D4C5D16C40C1C2B72AEB0956B929AC116906A5383662C74F29CF9E7E1",
+  "source_excerpts": [
+    {
+      "source_id": "decision-note",
+      "exact_quote": "Apex instability materially influenced the decision."
+    },
+    {
+      "source_id": "supplier-record",
+      "exact_quote": "Beacon requires roughly 10 weeks to reactivate."
+    }
+  ],
+  "candidates": [
+    {
+      "kind": "historical_role",
+      "semantic_key": "historical_support:apex_delivery_instability",
+      "source_id": "decision-note",
+      "exact_quote": "Apex instability materially influenced the decision.",
+      "boundary_accepted": true
+    },
+    {
+      "kind": "fact",
+      "semantic_key": "beacon_reactivation_delay",
+      "source_id": "supplier-record",
+      "exact_quote": "Beacon requires roughly 10 weeks to reactivate.",
+      "boundary_accepted": true
+    }
+  ]
+}
