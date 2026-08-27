@@ -103,7 +103,7 @@
 
   <!-- Zone D: temporal reevaluation and literal stop -->
   <g transform="translate(585 840)">
-    <text x="0" y="0" class="eyebrow navy">TEMPORAL DECISION STATE</text><text x="0" y="25" class="tiny muted">Deterministic temporal-ledger semantics · in-memory in the deployed golden slice</text>
+    <text x="0" y="0" class="eyebrow navy">TEMPORAL DECISION STATE</text><text x="0" y="25" class="tiny muted">Deterministic ledger semantics · in-memory golden slice</text>
     <path d="M325 7h55" class="line" marker-end="url(#arrowNavy)"/>
     <rect x="390" y="-38" width="250" height="88" rx="18" class="box"/><text x="415" y="-5" class="label navy">CURRENT-WORLD EVALUATION</text><text x="415" y="21" class="small red">M1 · Apex — DOES NOT MATCH</text><text x="415" y="43" class="small green">M2 · Beacon — MATCHES</text>
     <path d="M640 7h48" class="line" marker-end="url(#arrowNavy)"/>
