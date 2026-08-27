@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Decision Recall judge-facing architecture</title>
+  <desc id="desc">Two distinct lanes for release-proven Gemini interpretation and live Cloud Run human capture converge at the Decision Recall authority core, then continue through temporal reevaluation to safe reuse or stop.</desc>
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbf8f1"/>
+      <stop offset="0.54" stop-color="#f7f3ea"/>
+      <stop offset="1" stop-color="#f1ece2"/>
+    </linearGradient>
+    <radialGradient id="field" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#dce9e3" stop-opacity=".72"/>
+      <stop offset=".5" stop-color="#eaf0ea" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#f8f4ec" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18293d"/>
+      <stop offset="1" stop-color="#07111f"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#172335" flood-opacity=".12"/>
+    </filter>
+    <marker id="arrowNavy" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1l9 5-9 5z" fill="#24364b"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1l9 5-9 5z" fill="#13755a"/>
+    </marker>
+    <style>
+      text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#142133}
+      .caps{font-size:17px;font-weight:700;letter-spacing:3px}
+      .label{font-size:21px;font-weight:700;letter-spacing:.8px}
+      .small{font-size:16px;fill:#68717c}
+      .box{fill:#fffdf8;stroke:#d7d1c6;stroke-width:1.5}
+      .release{stroke:#50657b}
+      .live{stroke:#168064}
+      .line{fill:none;stroke:#24364b;stroke-width:2.5}
+      .dash{stroke-dasharray:9 9}
+      .inverse{fill:#fff}
+      .inverseSub{fill:#b8c7d4}
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#paper)"/>
+  <circle cx="960" cy="590" r="520" fill="url(#field)"/>
+  <g opacity=".32" fill="none" stroke="#9ba6ad">
+    <circle cx="960" cy="590" r="330"/>
+    <circle cx="960" cy="590" r="430"/>
+    <path d="M90 590H1830" stroke-dasharray="2 13"/>
+  </g>
+
+  <g transform="translate(86 55)">
+    <circle cx="28" cy="28" r="28" fill="#101d2d"/>
+    <text x="28" y="35" class="inverse" font-size="17" font-weight="800" text-anchor="middle">DR</text>
+    <text x="78" y="24" font-size="24" font-weight="800" letter-spacing="5">DECISION RECALL</text>
+    <text x="78" y="50" font-size="13" font-weight="700" letter-spacing="4" fill="#a85a19">TEMPORAL AUTHORITY</text>
+  </g>
+
+  <text x="960" y="82" text-anchor="middle" font-size="41" font-weight="800" letter-spacing="1">MEMORY IS NOT AUTHORITY.</text>
+  <text x="960" y="124" text-anchor="middle" font-size="23" fill="#53606b">Gemini interprets. Decision Recall authorizes.</text>
+  <g transform="translate(777 149)">
+    <rect width="366" height="39" rx="19.5" fill="#fffaf1" stroke="#d1c5ad"/>
+    <text x="183" y="26" text-anchor="middle" class="caps" font-size="14">SAME DECISION CASE · D-104</text>
+  </g>
+
+  <!-- lane headers -->
+  <g transform="translate(140 212)">
+    <text class="caps" fill="#3c536c">RELEASE EVIDENCE LANE</text>
+    <text y="29" class="small">Credentialed interpretation · not the live YES request</text>
+    <line y1="52" x2="690" y2="52" stroke="#7890a4" stroke-width="2"/>
+  </g>
+  <g transform="translate(1090 212)">
+    <text class="caps" fill="#116e56">LIVE CLOUD RUN LANE</text>
+    <text y="29" class="small">Server-bound capture · no Gemini call</text>
+    <line y1="52" x2="690" y2="52" stroke="#51a28c" stroke-width="2"/>
+  </g>
+
+  <!-- release lane -->
+  <g filter="url(#shadow)">
+    <rect class="box release" x="140" y="293" width="300" height="108" rx="20"/>
+    <text x="290" y="326" text-anchor="middle" class="caps" font-size="14">SOURCE RECORDS</text>
+    <text x="290" y="359" text-anchor="middle" font-size="19">Apex instability</text>
+    <text x="290" y="384" text-anchor="middle" font-size="19">Beacon restart delay</text>
+
+    <rect class="box release" x="520" y="293" width="300" height="108" rx="20"/>
+    <text x="670" y="331" text-anchor="middle" class="caps" font-size="14">GEMINI 3.7 FLASH</text>
+    <text x="670" y="363" text-anchor="middle" font-size="19" font-weight="700">RELEASE-PROVEN</text>
+    <text x="670" y="386" text-anchor="middle" class="small">bounded interpretation</text>
+
+    <rect class="box release" x="330" y="455" width="300" height="108" rx="20"/>
+    <text x="480" y="494" text-anchor="middle" class="caps" font-size="14">BOUNDED CANDIDATES</text>
+    <text x="480" y="527" text-anchor="middle" font-size="18">fact + historical-role proposal</text>
+    <text x="480" y="550" text-anchor="middle" class="small">candidate ≠ authority</text>
+
+    <rect class="box release" x="710" y="455" width="300" height="108" rx="20"/>
+    <text x="860" y="494" text-anchor="middle" class="caps" font-size="14">DETERMINISTIC ADMISSION</text>
+    <text x="860" y="527" text-anchor="middle" font-size="18">exact grounding + profile</text>
+    <text x="860" y="550" text-anchor="middle" class="small">unsupported candidates stop here</text>
+  </g>
+  <path class="line dash" d="M440 347H510" marker-end="url(#arrowNavy)"/>
+  <path class="line dash" d="M670 401v34q0 20-20 20H640" marker-end="url(#arrowNavy)"/>
+  <path class="line dash" d="M630 509H700" marker-end="url(#arrowNavy)"/>
+
+  <!-- live lane -->
+  <g filter="url(#shadow)">
+    <rect class="box live" x="1090" y="293" width="300" height="108" rx="20"/>
+    <text x="1240" y="331" text-anchor="middle" class="caps" font-size="14">ISSUED CRITICAL GAP</text>
+    <text x="1240" y="364" text-anchor="middle" font-size="19" font-weight="700">historical influence</text>
+    <text x="1240" y="388" text-anchor="middle" font-size="16" fill="#b56a18">NOT ESTABLISHED</text>
+
+    <rect class="box live" x="1470" y="293" width="310" height="108" rx="20"/>
+    <text x="1625" y="331" text-anchor="middle" class="caps" font-size="14">EXACT CLARIFICATION</text>
+    <text x="1625" y="364" text-anchor="middle" font-size="18">Did Beacon's restart delay</text>
+    <text x="1625" y="388" text-anchor="middle" font-size="18">materially influence D-104?</text>
+
+    <rect class="box live" x="1280" y="455" width="300" height="108" rx="20"/>
+    <text x="1430" y="494" text-anchor="middle" class="caps" font-size="14">HUMAN DECLARATION</text>
+    <text x="1430" y="527" text-anchor="middle" font-size="18">answered in the browser</text>
+    <text x="1430" y="550" text-anchor="middle" class="small">cannot grant authority directly</text>
+
+    <rect class="box live" x="1660" y="455" width="220" height="108" rx="20"/>
+    <text x="1770" y="490" text-anchor="middle" class="caps" font-size="13">CAPTURE GATE</text>
+    <text x="1770" y="519" text-anchor="middle" font-size="17" font-weight="700">SERVER VERIFIED</text>
+    <text x="1770" y="546" text-anchor="middle" class="small">session · gap · question</text>
+  </g>
+  <path class="line" stroke="#13755a" d="M1390 347H1460" marker-end="url(#arrowGreen)"/>
+  <path class="line" stroke="#13755a" d="M1625 401v34q0 20-20 20h-15" marker-end="url(#arrowGreen)"/>
+  <path class="line" stroke="#13755a" d="M1580 509H1650" marker-end="url(#arrowGreen)"/>
+
+  <!-- convergence -->
+  <path class="line dash" d="M860 563v60q0 24 24 24h256" marker-end="url(#arrowNavy)"/>
+  <path class="line" stroke="#13755a" d="M1770 563v60q0 24-24 24h-586" marker-end="url(#arrowGreen)"/>
+  <text x="960" y="620" text-anchor="middle" class="caps" font-size="13" fill="#8b5d20">INTERPRETATION ≠ AUTHORITY</text>
+
+  <!-- core -->
+  <g filter="url(#shadow)">
+    <rect x="690" y="665" width="540" height="133" rx="66" fill="url(#core)" stroke="#4d6b83" stroke-width="2"/>
+    <text x="960" y="710" text-anchor="middle" class="inverse" font-size="17" font-weight="700" letter-spacing="3">DECISION RECALL</text>
+    <text x="960" y="751" text-anchor="middle" class="inverse" font-size="32" font-weight="800">AUTHORITY CORE</text>
+    <text x="960" y="779" text-anchor="middle" class="inverseSub" font-size="16">grounding · identity · policy · gap selection</text>
+  </g>
+
+  <!-- temporal route -->
+  <path d="M960 798V836" class="line" marker-end="url(#arrowNavy)"/>
+  <g filter="url(#shadow)">
+    <rect class="box" x="210" y="858" width="330" height="96" rx="20" stroke="#158061"/>
+    <text x="375" y="895" text-anchor="middle" class="caps" font-size="14">TEMPORAL LEDGER</text>
+    <text x="375" y="927" text-anchor="middle" font-size="18" fill="#13755a">history remains established</text>
+
+    <rect class="box" x="795" y="858" width="330" height="96" rx="20"/>
+    <text x="960" y="895" text-anchor="middle" class="caps" font-size="14">LATER-WORLD EVIDENCE</text>
+    <text x="960" y="927" text-anchor="middle" font-size="18">applicability reevaluated</text>
+
+    <rect class="box" x="1380" y="858" width="330" height="96" rx="20" stroke="#b56a18"/>
+    <text x="1545" y="895" text-anchor="middle" class="caps" font-size="14">SAFE REUSE / STOP</text>
+    <text x="1545" y="927" text-anchor="middle" font-size="18" fill="#a85a19">missing sufficiency stays missing</text>
+  </g>
+  <path d="M950 836q-10 22-50 22H550" class="line" marker-end="url(#arrowNavy)"/>
+  <path d="M540 906H785" class="line" marker-end="url(#arrowNavy)"/>
+  <path d="M1125 906H1370" class="line" marker-end="url(#arrowNavy)"/>
+
+  <g transform="translate(124 1005)">
+    <circle cx="8" cy="8" r="8" fill="#50657b"/>
+    <text x="28" y="14" class="small">release-proven interpretation</text>
+    <circle cx="310" cy="8" r="8" fill="#168064"/>
+    <text x="330" y="14" class="small">live server-verified capture</text>
+  </g>
+  <text x="1795" y="1020" text-anchor="end" font-size="17" font-weight="700" fill="#8c5b19">NO EVIDENCE → NO AUTHORITY → NO FABRICATED COMPLETION</text>
+</svg>
