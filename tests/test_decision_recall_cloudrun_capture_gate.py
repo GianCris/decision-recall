@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from decision_recall.product.cloudrun_server import (
     CaptureBindingMismatch,
@@ -32,24 +33,36 @@ class CloudRunCaptureGateTests(unittest.TestCase):
         result = complete_verified_capture(self._valid_payload())
 
         validation = result["capture_validation"]
-        presentation = result["presentation"]
+        capture = result["capture"]
         self.assertEqual(validation["status"], "accepted")
         self.assertEqual(validation["gap_id"], "R2")
         self.assertEqual(validation["answer"], "yes")
         self.assertEqual(validation["completion"], "allowed")
-        self.assertEqual(presentation["capture"]["knowledge_state"], "established")
+        self.assertEqual(capture["decision_id"], "D-104")
+        self.assertEqual(capture["relation_id"], "R2")
+        self.assertEqual(capture["knowledge_state"], "established")
+        self.assertEqual(result["future_evaluation_status"], "not_requested")
 
-        matches = {
-            item["entity_id"]: item["state"]
-            for item in presentation["current_matches"]
-        }
-        self.assertEqual(matches["M1"], "does_not_match")
-        self.assertEqual(matches["M2"], "matches")
-        self.assertEqual(presentation["reuse_boundary"]["limiting_entity_id"], "C1")
-        self.assertEqual(
-            presentation["reuse_boundary"]["safe_reuse_result"],
-            "insufficient_evidence",
-        )
+        serialized = str(result)
+        for forbidden in (
+            "current_matches",
+            "safe_reuse_result",
+            "limiting_requirements",
+            "reason_codes",
+            "evaluation_hash",
+            "replay_hash",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_live_capture_path_never_calls_full_golden_compatibility_run(self) -> None:
+        with patch(
+            "decision_recall.product.cloudrun_server.run_golden_decision",
+            side_effect=AssertionError("live capture must not run T1 compatibility path"),
+        ):
+            result = complete_verified_capture(self._valid_payload())
+
+        self.assertEqual(result["capture"]["knowledge_state"], "established")
+        self.assertEqual(result["future_evaluation_status"], "not_requested")
 
     def test_tampered_binding_is_rejected(self) -> None:
         for field in ("capture_session_id", "gap_id", "question_hash"):
