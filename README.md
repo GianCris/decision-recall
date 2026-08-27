@@ -46,7 +46,7 @@ LATER-WORLD EVIDENCE CHANGES → APPLICABILITY REEVALUATED
 REUSE SUFFICIENCY WAS NEVER ESTABLISHED → STOP
 ```
 
-Gemini interprets human-readable decision records into bounded candidates. Decision Recall grounds those candidates, controls identity and authority, detects the relation the evidence cannot establish, and asks the human only for that missing authority. After verified capture, historical rationale remains recorded while current applicability is evaluated separately.
+In the separately release-proven interpretation path, Gemini maps human-readable decision records into bounded candidates. In the live judge path, Decision Recall deterministically reconstructs the issued state, identifies the unresolved required relation, and asks for the human authority it cannot infer. After verified capture, historical rationale remains recorded while current applicability is evaluated separately.
 
 ## More Than Retrieval or Memory
 
