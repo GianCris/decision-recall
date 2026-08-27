@@ -83,7 +83,7 @@ jobs:
 
       - name: Install Decision Threads dependencies
         working-directory: apps/decision-threads
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build Decision Threads
         working-directory: apps/decision-threads

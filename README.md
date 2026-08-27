@@ -80,7 +80,7 @@ python -m venv .venv
 python -m pip install -e .
 
 Set-Location apps/decision-threads
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run build
 Set-Location ../..
 
@@ -94,7 +94,7 @@ Invoke-RestMethod http://localhost:8080/health
 Invoke-RestMethod http://localhost:8080/api/capture-preparation
 ```
 
-`npm run build` first generates the deterministic fallback at `apps/decision-threads/public/demo-state.json`, then creates the frontend build in `apps/decision-threads/dist`. The server defaults to port `8080` and serves that directory. No environment variable or Gemini credential is required for the local judge-facing winner slice because the hero path is deterministic.
+The committed npm lockfile pins the frontend dependency graph for reproducible installs. `npm run build` first generates the deterministic fallback at `apps/decision-threads/public/demo-state.json`, then creates the frontend build in `apps/decision-threads/dist`. The server defaults to port `8080` and serves that directory. No environment variable or Gemini credential is required for the local judge-facing winner slice because the hero path is deterministic.
 
 Docker provides the closest local equivalent to the deployed container:
 

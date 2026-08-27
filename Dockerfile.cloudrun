@@ -13,7 +13,7 @@ FROM node:24-slim AS web
 
 WORKDIR /src/apps/decision-threads
 COPY --from=state /src/apps/decision-threads ./
-RUN npm install --no-audit --no-fund \
+RUN npm ci --no-audit --no-fund \
     && npm exec vite build
 
 FROM python:3.11-slim AS runtime
