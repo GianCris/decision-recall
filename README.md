@@ -43,26 +43,13 @@ The same prototype supports Spanish and English copy from one semantic source. S
 
 Before submission, the real judge-facing backend must be hosted on explicit Google Cloud infrastructure (minimum target: Cloud Run), the repository must include architecture/spin-up documentation, and the submitted video must show a continuous unedited live execution plus visible Google Cloud deployment proof.
 
-## Core architecture
+## Architecture
 
-```text
-raw language / tool output
-        ↓
-probabilistic candidate extraction
-        ↓
-evidence + policy authorization
-        ↓
-canonical typed state
-══════════════════════════════════
-DETERMINISTIC DECISION RECALL CORE
-══════════════════════════════════
-        ↓
-current-world match
-revisit evaluation
-target-scoped safe-reuse evaluation
-        ↓
-guarded epistemic result
-```
+![Decision Recall architecture](docs/architecture/decision-recall-architecture.svg)
+
+Decision Recall separates probabilistic evidence interpretation from deterministic authority. Gemini produces bounded candidate evidence; the Decision Recall core controls identity, provenance, temporal authority, gap selection, evaluation, replay, and epistemic boundaries.
+
+Human knowledge enters only through a server-verified capture gate when the system reaches a relation it cannot legitimately infer. Historical roles remain recorded while current-world applicability is reevaluated separately. If a required reuse relation was never established, the system stops with insufficient evidence rather than inventing a completion.
 
 The deterministic core deliberately separates:
 
