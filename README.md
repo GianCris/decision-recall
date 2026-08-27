@@ -28,7 +28,7 @@ Human feedback does not merely change the conversation; it changes the authorize
 
 - **Google Agent Framework used: Google GenAI SDK** (`google-genai` 2.14.0).
 - **Gemini 3.7 Flash** produces bounded candidate evidence in the credentialed, release-proven compiler path. It does not authorize state and is not called by the live **YES** interaction.
-- **Google Cloud Run** hosts the React winner slice, Capture Gate API, and deterministic Decision Recall runtime.
+- **Google Cloud Run** serves the built React frontend assets and hosts the Capture Gate API and deterministic Decision Recall runtime.
 - **Google Cloud Build** builds the committed `Dockerfile.cloudrun` image.
 - **Artifact Registry** stores the Cloud Build image at `us-central1-docker.pkg.dev/<PROJECT_ID>/decision-recall/winner-slice:latest`.
 - **React + Motion + SVG/CSS** provide the Temporal Observatory presentation; they project engine truth and do not compute authority.
