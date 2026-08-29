@@ -1,11 +1,11 @@
-export const AGENT_PROOF_DURATION_MS = 6900;
+export const AGENT_PROOF_DURATION_MS = 5000;
 
 export const AGENT_PROOF_REVEAL_SECONDS = Object.freeze({
   source: 0,
-  interpretation: 1.4,
-  authority: 2.8,
-  gap: 4.4,
-  question: 5.5,
+  interpretation: 0.9,
+  authority: 1.8,
+  gap: 3.0,
+  question: 3.8,
 });
 
 export function agentProofVisibleForPhase(phase, requestedVisible) {

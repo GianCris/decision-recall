@@ -104,6 +104,12 @@ test("live failure, retry, phase gates, and reset are fail-closed in the rendere
   assert.match(source, /setReevaluationError\(null\)/);
   assert.match(source, /setReevaluationStatus\("idle"\)/);
   assert.match(source, /future_evaluation_status !== "not_requested"/);
+  assert.match(source, /Knowing a fact is not knowing why a decision was made\./);
+  assert.match(source, /SIMULATED T1 · \+6 WEEKS · \{acceptedCount\} SUPPLIED RECORDS ADMITTED/);
+  assert.match(source, /reevaluationResult\?\.accepted_world_events\?\.length \|\| 0/);
+  assert.match(source, /Live server reevaluation complete/);
+  assert.match(source, /\{live \? "SERVER-DERIVED" : "REPLAYED"\} · \{view\.reuse_boundary\.safe_reuse_result/);
+  assert.doesNotMatch(source, /SIMULATED T1 · \+6 WEEKS · 2 SUPPLIED RECORDS ADMITTED/);
 });
 
 test("proof surface tracks T0 and T1 as separate live envelopes", () => {

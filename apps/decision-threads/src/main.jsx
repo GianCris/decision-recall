@@ -17,7 +17,7 @@ import {
 const COPY = {
   0: {
     eyebrow: "Initial decision",
-    title: "A decision held in time.",
+    title: "Knowing a fact is not knowing why a decision was made.",
     body: "Apex was unstable. Beacon needed about 10 weeks to restart. D-104 recorded a six-month keep-both decision.",
     action: "Inspect decision",
   },
@@ -187,7 +187,9 @@ function AgentProof({ live, view }) {
         </ProofReveal>
       </div>
 
-      <div className="agent-proof-separator" />
+      <div className="agent-proof-separator">
+        <span>GEMINI INTERPRETS · DECISION RECALL AUTHORIZES</span>
+      </div>
 
       <div className="agent-proof-live">
         <ProofReveal delay={AGENT_PROOF_REVEAL_SECONDS.authority} className="agent-proof-authority">
@@ -212,7 +214,7 @@ function AgentProof({ live, view }) {
   );
 }
 
-function DecisionCanvas({ phase, view, boundaryRevealed, reevaluationComplete }) {
+function DecisionCanvas({ phase, view, boundaryRevealed, reevaluationComplete, live }) {
   const captureEstablished = phase >= 2;
   const gapDiscovered = phase >= 1 && !captureEstablished;
   const now = phase >= 3 && reevaluationComplete;
@@ -381,7 +383,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed, reevaluationComplete })
           <span className="context-label">REUSE SUFFICIENCY · NEVER ESTABLISHED</span>
           <h2>{reusePresentationModel(view.reuse_boundary).title}</h2>
           <p>{reusePresentationModel(view.reuse_boundary).explanation}</p>
-          <div className="boundary-status">{view.reuse_boundary.safe_reuse_result.replaceAll("_", " ")}</div>
+          <div className="boundary-status">{live ? "SERVER-DERIVED" : "REPLAYED"} · {view.reuse_boundary.safe_reuse_result.replaceAll("_", " ")}</div>
           {view.reuse_boundary.limiting_requirements.length > 0 && <small className="boundary-limits">Limiting requirement: {view.reuse_boundary.limiting_requirements.join(", ")}</small>}
         </motion.div>
       )}
@@ -434,7 +436,7 @@ function LaterWorldRecords({ pending, error, complete, acceptedCount }) {
       </div>}
       {pending && <div className="reevaluation-state pending"><b>VALIDATING &amp; REEVALUATING LATER-WORLD RECORDS…</b><span>Awaiting the live Cloud Run response.</span></div>}
       {error && <div className="reevaluation-state error"><b>REEVALUATION NOT ACCEPTED</b><span>{error}</span></div>}
-      {complete && <div className="reevaluation-state accepted"><b>{acceptedCount} RECORDS ADMITTED UNDER EVENT POLICY</b><span>REEVALUATION COMPLETE</span></div>}
+      {complete && <div className="reevaluation-state accepted"><b>SIMULATED T1 · +6 WEEKS · {acceptedCount} SUPPLIED RECORDS ADMITTED</b><span>Live server reevaluation complete</span></div>}
     </motion.section>
   );
 }
@@ -500,7 +502,7 @@ function App() {
   useEffect(() => {
     setBoundaryRevealed(false);
     if (phase === 4) {
-      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1850);
+      const timer = window.setTimeout(() => setBoundaryRevealed(true), 1200);
       return () => window.clearTimeout(timer);
     }
     return undefined;
@@ -731,7 +733,7 @@ function App() {
       </header>
 
       <section className="experience">
-        <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} reevaluationComplete={reevaluationComplete} />
+        <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} reevaluationComplete={reevaluationComplete} live={live} />
 
         <AnimatePresence>
           {showAgentProof && (
@@ -768,6 +770,13 @@ function App() {
             complete={reevaluationStatus === "complete"}
             acceptedCount={reevaluationResult?.accepted_world_events?.length || 0}
           />
+        )}
+
+        {phase === 4 && live && reevaluationStatus === "complete" && (
+          <motion.div className="t1-disclosure" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
+            <b>SIMULATED T1 · +6 WEEKS · {reevaluationResult?.accepted_world_events?.length || 0} SUPPLIED RECORDS ADMITTED</b>
+            <span>Live server reevaluation complete</span>
+          </motion.div>
         )}
 
         {!(phase === 4 && boundaryRevealed) && (

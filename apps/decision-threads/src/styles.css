@@ -312,6 +312,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .reevaluation-state.pending { color: #77591f; background: rgba(255,244,216,.82); border: 1px solid rgba(183,121,20,.25); }
 .reevaluation-state.error { color: #963b38; background: rgba(255,237,235,.82); border: 1px solid rgba(200,74,69,.25); }
 .reevaluation-state.accepted { color: #176e4b; background: rgba(232,247,238,.84); border: 1px solid rgba(24,132,86,.24); }
+.t1-disclosure {
+  position: absolute;
+  z-index: 11;
+  right: 30px;
+  top: 88px;
+  max-width: 390px;
+  padding: 10px 13px;
+  border: 1px solid rgba(24,132,86,.22);
+  border-radius: 14px;
+  background: rgba(240,248,242,.92);
+  color: #176e4b;
+  box-shadow: 0 16px 38px rgba(44,70,55,.1);
+  backdrop-filter: blur(14px);
+}
+.t1-disclosure b { display: block; font: 800 8px/1.3 "Manrope"; letter-spacing: .09em; }
+.t1-disclosure span { display: block; margin-top: 4px; color: #63756b; font-size: 9px; }
 
 .agent-proof {
   position: absolute;
@@ -366,7 +382,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 }
 .agent-proof-gemini p { display: flex; gap: 8px; margin: 11px 0 0; color: #414744; font: 700 11px/1.3 "Manrope"; }
 .agent-proof-gemini i { color: var(--green); font-style: normal; font-weight: 800; }
-.agent-proof-separator { position: relative; height: 1px; margin: 0 32px; background: rgba(131,119,100,.22); }
+.agent-proof-separator { display: flex; align-items: center; gap: 12px; height: 20px; margin: 0 32px; color: #747a77; }
+.agent-proof-separator::before, .agent-proof-separator::after { content: ""; height: 1px; flex: 1; background: rgba(131,119,100,.22); }
+.agent-proof-separator span { flex: 0 0 auto; font: 800 8px/1 "Manrope"; letter-spacing: .13em; }
 .agent-proof-live {
   display: grid;
   grid-template-columns: 1.45fr 1fr;

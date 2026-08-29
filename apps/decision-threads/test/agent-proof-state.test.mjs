@@ -9,14 +9,19 @@ const projection = JSON.parse(
 );
 
 test("release projection is brief, release-only, and never attributes R2 to Gemini", () => {
-  assert.ok(AGENT_PROOF_DURATION_MS >= 6500 && AGENT_PROOF_DURATION_MS <= 7000);
+  assert.equal(AGENT_PROOF_DURATION_MS, 5000);
   assert.deepEqual(AGENT_PROOF_REVEAL_SECONDS, {
     source: 0,
-    interpretation: 1.4,
-    authority: 2.8,
-    gap: 4.4,
-    question: 5.5,
+    interpretation: 0.9,
+    authority: 1.8,
+    gap: 3.0,
+    question: 3.8,
   });
+  assert.ok(AGENT_PROOF_REVEAL_SECONDS.source < AGENT_PROOF_REVEAL_SECONDS.interpretation);
+  assert.ok(AGENT_PROOF_REVEAL_SECONDS.interpretation < AGENT_PROOF_REVEAL_SECONDS.authority);
+  assert.ok(AGENT_PROOF_REVEAL_SECONDS.authority < AGENT_PROOF_REVEAL_SECONDS.gap);
+  assert.ok(AGENT_PROOF_REVEAL_SECONDS.gap < AGENT_PROOF_REVEAL_SECONDS.question);
+  assert.ok(AGENT_PROOF_REVEAL_SECONDS.question * 1000 < AGENT_PROOF_DURATION_MS);
   assert.equal(projection.evidence_class, "release_proven_not_live_hero_request");
   assert.equal(projection.model, "gemini-3.7-flash");
   assert.deepEqual(
@@ -32,6 +37,7 @@ test("inspect autonomously reveals the proof without a second continue control",
   assert.doesNotMatch(source, /SAME D-104 SEMANTICS/);
   assert.doesNotMatch(source, /Credentialed Gemini interpretation, preserved separately/);
   assert.match(source, /GEMINI 3\.7 FLASH · RELEASE-PROVEN/);
+  assert.match(source, /GEMINI INTERPRETS · DECISION RECALL AUTHORIZES/);
   assert.match(source, /ONE REQUIRED RELATION IS UNRESOLVED/);
   assert.match(source, /view\.capture\.question/);
   assert.match(source, /agent-proof-active/);
