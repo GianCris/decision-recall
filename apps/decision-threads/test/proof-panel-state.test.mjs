@@ -6,11 +6,13 @@ import { applyProofPayload, liveCaptureGateModel } from "../src/proof-panel-stat
 test("new preparation clears stale authority and Phase 01 remains pre-capture", () => {
   const completed = {
     capture_validation: { answer: "yes", status: "accepted", completion: "allowed" },
-    presentation: { capture: { knowledge_state: "established" } },
+    capture: { relation_id: "R2", knowledge_state: "established" },
+    future_evaluation_status: "not_requested",
   };
   const state = {
     preparation: { gap_id: "R2", knowledge_state: "not_durably_recorded", question_hash: "old" },
     captureEnvelope: completed,
+    reevaluationEnvelope: { stale: true },
     replayPresentation: null,
     geminiEvidence: { committed: true },
   };
@@ -33,6 +35,7 @@ test("new preparation clears stale authority and Phase 01 remains pre-capture", 
   assert.doesNotMatch(JSON.stringify(phaseOne), /YES · VERIFIED|ALLOWED|R2 · ESTABLISHED/);
 
   applyProofPayload(state, "/api/capture", true, completed);
+  assert.equal(state.reevaluationEnvelope, null);
   const phaseThree = liveCaptureGateModel({ phase: 2, preparation: state.preparation, captureEnvelope: state.captureEnvelope });
   assert.equal(phaseThree.humanResponse, "YES · VERIFIED");
   assert.equal(phaseThree.completion, "ALLOWED");

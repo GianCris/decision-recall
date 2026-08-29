@@ -1,9 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion } from "motion/react";
 import "./styles.css";
 import releaseEvidence from "./pc2-judge-safe-gemini-projection.json";
 import { AGENT_PROOF_DURATION_MS, AGENT_PROOF_REVEAL_SECONDS, agentProofVisibleForPhase } from "./agent-proof-state.js";
+import {
+  SUPPLIED_T1_RECORDS,
+  buildReevaluationPayload,
+  captureView,
+  isCurrentRequest,
+  matchLabels,
+  reevaluatedView,
+  reusePresentationModel,
+} from "./temporal-intake-state.js";
 
 const COPY = {
   0: {
@@ -22,18 +31,18 @@ const COPY = {
     eyebrow: "Human response verified",
     title: "The historical role is established.",
     body: null,
-    action: "Advance six weeks",
+    action: "View later-world records",
   },
   3: {
-    eyebrow: "Six weeks later",
-    title: "The world changes. History does not.",
-    body: "Apex improves to 98.7% on-time delivery. Current-world evaluation changes while the historical decision record remains intact.",
-    action: "Try to reuse the decision",
+    eyebrow: "Simulated T1 · +6 weeks",
+    title: "Later-world records are ready.",
+    body: "Supplied demo records are ready for live policy validation and reevaluation.",
+    action: "Ingest & reevaluate",
   },
   4: {
     eyebrow: "Reuse boundary",
-    title: "I CAN’T ESTABLISH THAT",
-    body: "Beacon mattered to the original decision. What was never established: was that reason sufficient on its own?",
+    title: "Reuse result available.",
+    body: null,
     action: "Replay",
   },
 };
@@ -43,8 +52,6 @@ const humanizeMatch = (state) => ({
   does_not_match: "no longer matches",
   matches: "still matches",
 }[state] || "current evaluation");
-
-const delay = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 function DrawPath({ d, kind = "history", delay: pathDelay = 0, dim = false }) {
   const markerEnd = kind === "current-match"
@@ -205,11 +212,12 @@ function AgentProof({ live, view }) {
   );
 }
 
-function DecisionCanvas({ phase, view, boundaryRevealed }) {
+function DecisionCanvas({ phase, view, boundaryRevealed, reevaluationComplete }) {
   const captureEstablished = phase >= 2;
   const gapDiscovered = phase >= 1 && !captureEstablished;
-  const now = phase >= 3;
-  const reuse = phase >= 4;
+  const now = phase >= 3 && reevaluationComplete;
+  const reusePresentation = reusePresentationModel(view.reuse_boundary);
+  const reuse = phase >= 4 && reusePresentation.showStop;
   const matches = useMemo(
     () => Object.fromEntries((view.current_matches || []).map((x) => [x.entity_id, x.state])),
     [view],
@@ -324,7 +332,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
               title={labelForMatch("M1")}
               subtitle={humanizeMatch(matches.M1)}
               kind="signal"
-              status={{ label: "NO LONGER MATCHES", tone: "red" }}
+              status={{ label: matchLabels(view.current_matches).M1, tone: matches.M1 === "does_not_match" ? "red" : "neutral" }}
             />
             <InstrumentNode
               x={1060}
@@ -332,7 +340,7 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
               title={labelForMatch("M2")}
               subtitle={humanizeMatch(matches.M2)}
               kind="signal"
-              status={{ label: "STILL MATCHES", tone: "green" }}
+              status={{ label: matchLabels(view.current_matches).M2, tone: matches.M2 === "matches" ? "green" : "neutral" }}
             />
           </motion.g>
         )}
@@ -368,12 +376,22 @@ function DecisionCanvas({ phase, view, boundaryRevealed }) {
         )}
       </AnimatePresence>
 
-      {phase === 4 && boundaryRevealed && view.reuse_boundary && (
+      {phase === 4 && boundaryRevealed && reusePresentationModel(view.reuse_boundary).showStop && (
         <motion.div className="boundary-hero" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.42 }}>
           <span className="context-label">REUSE SUFFICIENCY · NEVER ESTABLISHED</span>
-          <h2>I CAN’T ESTABLISH THAT</h2>
-          <p>Beacon mattered then. We never established whether that reason was sufficient on its own.</p>
+          <h2>{reusePresentationModel(view.reuse_boundary).title}</h2>
+          <p>{reusePresentationModel(view.reuse_boundary).explanation}</p>
           <div className="boundary-status">{view.reuse_boundary.safe_reuse_result.replaceAll("_", " ")}</div>
+          {view.reuse_boundary.limiting_requirements.length > 0 && <small className="boundary-limits">Limiting requirement: {view.reuse_boundary.limiting_requirements.join(", ")}</small>}
+        </motion.div>
+      )}
+
+      {phase === 4 && boundaryRevealed && view.reuse_boundary && !reusePresentationModel(view.reuse_boundary).showStop && (
+        <motion.div className="boundary-hero neutral" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.42 }}>
+          <span className="context-label">SERVER-DERIVED REUSE RESULT</span>
+          <h2>{reusePresentationModel(view.reuse_boundary).title}</h2>
+          <div className="boundary-status">{view.reuse_boundary.safe_reuse_result.replaceAll("_", " ")}</div>
+          {view.reuse_boundary.limiting_requirements.length > 0 && <small className="boundary-limits">Limiting requirement: {view.reuse_boundary.limiting_requirements.join(", ")}</small>}
         </motion.div>
       )}
     </div>
@@ -393,6 +411,32 @@ function preparationView(preparation) {
     evaluation_hash: null,
     replay_hash: null,
   };
+}
+
+function LaterWorldRecords({ pending, error, complete, acceptedCount }) {
+  const records = Object.fromEntries(SUPPLIED_T1_RECORDS.map((record) => [record.metric_key, record]));
+  return (
+    <motion.section
+      className={`later-world-records ${pending ? "pending" : ""} ${complete ? "complete" : ""}`}
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.38 }}
+      aria-label="Supplied later-world records"
+    >
+      {!complete && <header>
+        <span>SIMULATED T1 · +6 WEEKS</span>
+        <b>SUPPLIED LATER-WORLD RECORDS</b>
+        <small>Demo inputs · external origin not independently authenticated</small>
+      </header>}
+      {!complete && <div className="later-record-grid">
+        <article><span>APEX</span><strong>{records.apex_on_time_rate.value * 100}% on-time</strong><small>{records.apex_on_time_rate.window_days}-day window</small></article>
+        <article><span>BEACON</span><strong>{records.beacon_reactivation_days.value} days</strong><small>to reactivate</small></article>
+      </div>}
+      {pending && <div className="reevaluation-state pending"><b>VALIDATING &amp; REEVALUATING LATER-WORLD RECORDS…</b><span>Awaiting the live Cloud Run response.</span></div>}
+      {error && <div className="reevaluation-state error"><b>REEVALUATION NOT ACCEPTED</b><span>{error}</span></div>}
+      {complete && <div className="reevaluation-state accepted"><b>{acceptedCount} RECORDS ADMITTED UNDER EVENT POLICY</b><span>REEVALUATION COMPLETE</span></div>}
+    </motion.section>
+  );
 }
 
 async function loadInitialState() {
@@ -428,7 +472,13 @@ function App() {
   const [captureStatus, setCaptureStatus] = useState("idle");
   const [captureError, setCaptureError] = useState(null);
   const [captureValidation, setCaptureValidation] = useState(null);
+  const [captureEnvelope, setCaptureEnvelope] = useState(null);
+  const [reevaluationStatus, setReevaluationStatus] = useState("idle");
+  const [reevaluationError, setReevaluationError] = useState(null);
+  const [reevaluationResult, setReevaluationResult] = useState(null);
   const [agentProofRequested, setAgentProofRequested] = useState(false);
+  const requestGeneration = useRef(0);
+  const reevaluationController = useRef(null);
 
   const applyInitialState = ({ preparation: nextPreparation, view: nextView, source: nextSource }) => {
     setPreparation(nextPreparation);
@@ -437,6 +487,10 @@ function App() {
     setCaptureStatus("idle");
     setCaptureError(null);
     setCaptureValidation(null);
+    setCaptureEnvelope(null);
+    setReevaluationStatus("idle");
+    setReevaluationError(null);
+    setReevaluationResult(null);
   };
 
   useEffect(() => {
@@ -469,7 +523,11 @@ function App() {
 
   const copy = COPY[phase];
   const live = source === "live";
-  const pending = captureStatus === "pending";
+  const capturePending = captureStatus === "pending";
+  const reevaluationPending = reevaluationStatus === "pending";
+  const reevaluationComplete = !live || reevaluationStatus === "complete";
+  const pending = capturePending || reevaluationPending;
+  const reuseModel = reusePresentationModel(view.reuse_boundary);
   const phaseCopy = phase === 2
     ? {
         ...copy,
@@ -477,14 +535,26 @@ function App() {
           ? "Cloud Run verified the human response. R2 now connects Beacon’s recorded constraint to D-104."
           : "The verified capture is being replayed. R2 connects Beacon’s recorded constraint to D-104.",
       }
-    : copy;
+    : phase === 3 && reevaluationStatus === "complete"
+      ? {
+          ...copy,
+          eyebrow: "Reevaluation complete",
+          title: "The world changes. History does not.",
+          body: "Server-derived current applicability is now visible; historical authority remains intact.",
+        }
+      : phase === 4 && view.reuse_boundary
+        ? {
+            ...copy,
+            title: reuseModel.title,
+            body: reuseModel.explanation,
+          }
+        : copy;
 
   const submitLiveCapture = async () => {
-    if (!live || !preparation || pending) return;
+    if (!live || !preparation || capturePending) return;
 
     setCaptureStatus("pending");
     setCaptureError(null);
-    const startedAt = performance.now();
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8000);
 
@@ -512,15 +582,17 @@ function App() {
         const message = payload?.message || `capture gate returned ${response.status}`;
         throw new Error(message);
       }
-      if (payload?.capture_validation?.status !== "accepted" || !payload?.presentation) {
+      if (
+        payload?.capture_validation?.status !== "accepted"
+        || payload?.capture?.knowledge_state !== "established"
+        || payload?.future_evaluation_status !== "not_requested"
+      ) {
         throw new Error("capture gate returned an invalid success envelope");
       }
 
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < 420) await delay(420 - elapsed);
-
       setCaptureValidation(payload.capture_validation);
-      setView(payload.presentation);
+      setCaptureEnvelope(payload);
+      setView(captureView(preparation, payload));
       setCaptureStatus("verified");
       setPhase(2);
     } catch (captureFailure) {
@@ -535,7 +607,58 @@ function App() {
     }
   };
 
+  const submitLiveReevaluation = async () => {
+    if (!live || !preparation || !captureEnvelope || reevaluationPending) return;
+
+    const generation = requestGeneration.current;
+    const controller = new AbortController();
+    reevaluationController.current = controller;
+    setReevaluationStatus("pending");
+    setReevaluationError(null);
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const response = await fetch("/api/reevaluate", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify(buildReevaluationPayload(preparation)),
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch { payload = null; }
+      if (!response.ok) throw new Error(payload?.message || `reevaluation returned ${response.status}`);
+      if (
+        payload?.status !== "reevaluated"
+        || !Array.isArray(payload.current_matches)
+        || !Array.isArray(payload.accepted_world_events)
+        || !payload.evaluation_hash
+        || !payload.replay_hash
+      ) {
+        throw new Error("reevaluation returned an invalid success envelope");
+      }
+      if (!isCurrentRequest(generation, requestGeneration.current)) return;
+      setReevaluationResult(payload);
+      setView((current) => reevaluatedView(current, payload));
+      setReevaluationStatus("complete");
+    } catch (reevaluationFailure) {
+      if (!isCurrentRequest(generation, requestGeneration.current)) return;
+      setReevaluationStatus("error");
+      setReevaluationError(
+        reevaluationFailure?.name === "AbortError"
+          ? "Cloud Run reevaluation timed out. T0 remains the last accepted state."
+          : reevaluationFailure?.message || String(reevaluationFailure),
+      );
+    } finally {
+      window.clearTimeout(timeout);
+      if (reevaluationController.current === controller) reevaluationController.current = null;
+    }
+  };
+
   const resetExperience = async () => {
+    requestGeneration.current += 1;
+    reevaluationController.current?.abort();
+    reevaluationController.current = null;
     setBoundaryRevealed(false);
     setPhase(0);
     try {
@@ -562,18 +685,32 @@ function App() {
       await resetExperience();
       return;
     }
+    if (phase === 3 && live && reevaluationStatus !== "complete") {
+      await submitLiveReevaluation();
+      return;
+    }
     setPhase((current) => current + 1);
   };
 
   const actionLabel = phase === 1
     ? live
-      ? pending
+      ? capturePending
         ? "Verifying with Cloud Run…"
         : captureStatus === "error"
           ? "Retry verification"
           : COPY[1].action
       : "Replay capture"
-    : copy.action;
+    : phase === 3 && live
+      ? reevaluationPending
+        ? "Validating & reevaluating…"
+        : reevaluationStatus === "error"
+          ? "Retry ingest & reevaluate"
+          : reevaluationStatus === "complete"
+            ? "Try to reuse the decision"
+            : COPY[3].action
+      : phase === 3 && !live
+        ? "Replay reevaluation"
+        : copy.action;
 
   const boundary = view.reuse_boundary;
   const showAgentProof = agentProofVisibleForPhase(phase, agentProofRequested);
@@ -594,7 +731,7 @@ function App() {
       </header>
 
       <section className="experience">
-        <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} />
+        <DecisionCanvas phase={phase} view={view} boundaryRevealed={boundaryRevealed} reevaluationComplete={reevaluationComplete} />
 
         <AnimatePresence>
           {showAgentProof && (
@@ -602,7 +739,7 @@ function App() {
           )}
         </AnimatePresence>
 
-        {phase === 1 && live && pending && (
+        {phase === 1 && live && capturePending && (
           <motion.div className="capture-gate-state pending" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
             <b>VERIFYING WITH CLOUD RUN…</b>
             <span>No server acceptance, no historical edge.</span>
@@ -622,6 +759,15 @@ function App() {
             <span className="capture-state-change"><s>NOT ESTABLISHED</s><i>→</i><strong>ESTABLISHED</strong></span>
             <small>Response binding matched · completion permitted</small>
           </motion.div>
+        )}
+
+        {phase === 3 && live && (
+          <LaterWorldRecords
+            pending={reevaluationPending}
+            error={reevaluationError}
+            complete={reevaluationStatus === "complete"}
+            acceptedCount={reevaluationResult?.accepted_world_events?.length || 0}
+          />
         )}
 
         {!(phase === 4 && boundaryRevealed) && (
@@ -653,6 +799,8 @@ function App() {
               {captureValidation && <div><dt>Human response</dt><dd>{captureValidation.answer.toUpperCase()} · VERIFIED</dd></div>}
               {captureValidation && <div><dt>Winner completion</dt><dd>{captureValidation.completion.toUpperCase()}</dd></div>}
               <div><dt>Current knowledge</dt><dd>{view.capture.knowledge_state}</dd></div>
+              {live && captureValidation && !reevaluationResult && <div><dt>Future evaluation</dt><dd>NOT REQUESTED</dd></div>}
+              {reevaluationResult && <div><dt>Later-world records</dt><dd>{reevaluationResult.accepted_world_events.length} ADMITTED UNDER EVENT POLICY</dd></div>}
               {boundary && <div><dt>Reuse result</dt><dd>{boundary.safe_reuse_result}</dd></div>}
               {boundary && <div><dt>Limiting requirement</dt><dd>{boundary.limiting_requirements.join(", ")}</dd></div>}
               {view.evaluation_hash && <div><dt>Evaluation hash</dt><dd><code>{view.evaluation_hash}</code></dd></div>}

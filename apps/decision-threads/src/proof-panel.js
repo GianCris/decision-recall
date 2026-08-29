@@ -1,10 +1,12 @@
 import { applyProofPayload, liveCaptureGateModel } from "./proof-panel-state.js";
+import { reusePresentationModel } from "./temporal-intake-state.js";
 
 const GEMINI_EVIDENCE_URL = "/proof/pc2-credentialed-release-evidence.json";
 
 const proofState = {
   preparation: null,
   captureEnvelope: null,
+  reevaluationEnvelope: null,
   replayPresentation: null,
   geminiEvidence: null,
   geminiEvidenceError: null,
@@ -31,7 +33,7 @@ window.fetch = async (...args) => {
   const response = await originalFetch(...args);
   const path = endpointPath(args[0]);
 
-  if (["/api/capture-preparation", "/api/capture", "/demo-state.json"].includes(path)) {
+  if (["/api/capture-preparation", "/api/capture", "/api/reevaluate", "/demo-state.json"].includes(path)) {
     response.clone().json().then((payload) => {
       applyProofPayload(proofState, path, response.ok, payload);
       emitProofUpdate();
@@ -78,7 +80,20 @@ function isLiveMode() {
 }
 
 function presentation() {
-  return proofState.captureEnvelope?.presentation || proofState.replayPresentation || null;
+  if (proofState.replayPresentation) return proofState.replayPresentation;
+  const evaluation = proofState.reevaluationEnvelope;
+  if (!evaluation) return null;
+  return {
+    capture: proofState.captureEnvelope?.capture || null,
+    current_matches: evaluation.current_matches || [],
+    reuse_boundary: {
+      limiting_requirements: evaluation.limiting_requirements || [],
+      safe_reuse_result: evaluation.safe_reuse_result,
+      reason_codes: evaluation.reason_codes || [],
+    },
+    evaluation_hash: evaluation.evaluation_hash,
+    replay_hash: evaluation.replay_hash,
+  };
 }
 
 function captureValidation() {
@@ -174,16 +189,17 @@ function renderCaptureGate(phase, live) {
 function renderCurrentWorld(phase) {
   const view = presentation();
   const matches = Object.fromEntries((view?.current_matches || []).map((item) => [item.entity_id, item.state]));
-  const active = phase >= 3;
+  const active = phase >= 3 && Boolean(view?.current_matches?.length);
 
   return `
     <section class="proof-v2-section ${active ? "" : "muted-section"}">
       <div class="proof-v2-section-head"><span>02</span><div><b>Current-world evaluation</b><small>History ≠ current match</small></div>${statusPill(active ? "ACTIVE" : "DORMANT", active ? "blue" : "gray")}</div>
       <p class="proof-v2-explain">Historical roles stay recorded even when the present world changes. Current evaluation is a separate layer.</p>
       ${active ? `<div class="proof-v2-rows">
+        ${proofState.reevaluationEnvelope?.accepted_world_events ? proofRow("Later-world records", `${proofState.reevaluationEnvelope.accepted_world_events.length} admitted under event policy`, "green") : ""}
         ${proofRow("M1 · Apex instability", humanize(matches.M1), matches.M1 === "does_not_match" ? "red" : "neutral")}
         ${proofRow("M2 · Beacon restart delay", humanize(matches.M2), matches.M2 === "matches" ? "green" : "neutral")}
-      </div>` : `<div class="proof-v2-dormant">Current World remains intentionally inactive until THEN → NOW.</div>`}
+      </div>` : `<div class="proof-v2-dormant">${phase >= 2 ? "Future evaluation: not requested." : "Current World remains intentionally inactive until THEN → NOW."}</div>`}
     </section>`;
 }
 
@@ -191,16 +207,16 @@ function renderBoundary(phase) {
   const view = presentation();
   const boundary = view?.reuse_boundary;
   const active = phase >= 4 && boundary;
+  const result = reusePresentationModel(boundary);
 
   return `
     <section class="proof-v2-section ${active ? "" : "muted-section"}">
-      <div class="proof-v2-section-head"><span>03</span><div><b>Epistemic boundary</b><small>Exact missing requirement</small></div>${statusPill(active ? "STOP" : "NOT REACHED", active ? "amber" : "gray")}</div>
+      <div class="proof-v2-section-head"><span>03</span><div><b>Epistemic boundary</b><small>Server-derived reuse result</small></div>${statusPill(active ? (result.showStop ? "STOP" : result.label) : "NOT REACHED", active ? (result.showStop ? "amber" : "blue") : "gray")}</div>
       <p class="proof-v2-explain">Decision Recall does not turn surviving historical evidence into a stronger claim than the record authorizes.</p>
       ${active ? `<div class="proof-v2-rows">
-        ${proofRow("Composition", humanize(boundary.composition_kind))}
-        ${proofRow("Recorded value", humanize(boundary.composition_value), "amber")}
-        ${proofRow("Limiting requirement", (boundary.limiting_requirements || []).join(", ") || boundary.limiting_entity_id || "C1", "amber")}
+        ${result.limitingRequirements.length ? proofRow("Limiting requirement", result.limitingRequirements.join(", "), "amber") : ""}
         ${proofRow("Safe reuse", humanize(boundary.safe_reuse_result), "amber")}
+        ${result.reasonCodes.length ? proofRow("Reason codes", result.reasonCodes.join(", "), "neutral") : ""}
       </div>` : `<div class="proof-v2-dormant">The reuse boundary is intentionally withheld until the reuse attempt.</div>`}
     </section>`;
 }
@@ -209,7 +225,7 @@ function renderReplayIntegrity(phase) {
   const view = presentation();
   const evaluationHash = view?.evaluation_hash;
   const replayHash = view?.replay_hash;
-  const available = phase >= 2 && evaluationHash && replayHash;
+  const available = phase >= 3 && evaluationHash && replayHash;
   const equal = available && evaluationHash === replayHash;
 
   return `
@@ -220,7 +236,7 @@ function renderReplayIntegrity(phase) {
         ${proofRow("Evaluation hash", truncate(evaluationHash, 26), "neutral", true)}
         ${proofRow("Replay hash", truncate(replayHash, 26), "neutral", true)}
         ${proofRow("Integrity", equal ? "evaluation = replay" : "hash mismatch", equal ? "green" : "red")}
-      </div>` : `<div class="proof-v2-dormant">Fingerprints become available after capture completion.</div>`}
+      </div>` : `<div class="proof-v2-dormant">Fingerprints become available only after live reevaluation.</div>`}
     </section>`;
 }
 
@@ -335,7 +351,7 @@ function visibleSnapshotText() {
     );
   }
 
-  if (phase >= 3) lines.push(`M1: ${matches.M1 || "—"}`, `M2: ${matches.M2 || "—"}`);
+  if (phase >= 3 && view?.current_matches?.length) lines.push(`M1: ${matches.M1 || "—"}`, `M2: ${matches.M2 || "—"}`);
   if (phase >= 4 && boundary) {
     lines.push(
       `boundary: ${(boundary.limiting_requirements || []).join(", ") || boundary.limiting_entity_id}`,
@@ -381,6 +397,7 @@ function refreshProof() {
   const live = isLiveMode();
   const phase = appPhase();
   const summary = modeSummary(live);
+  const evaluated = !live || Boolean(proofState.reevaluationEnvelope);
   const existingScroll = panel.scrollTop;
 
   panel.innerHTML = `
@@ -394,7 +411,7 @@ function refreshProof() {
       <p>${escapeHtml(summary.body)}</p>
     </header>
     <div class="proof-v2-live-strip">
-      <div><span>VISIBLE STATE</span><b>${phase < 2 ? "R2 unresolved" : phase < 3 ? "R2 established" : phase < 4 ? "Current world evaluated" : "Reuse boundary reached"}</b></div>
+      <div><span>VISIBLE STATE</span><b>${phase < 2 ? "R2 unresolved" : phase < 3 || !evaluated ? "R2 established · T1 not evaluated" : phase < 4 ? "Current world evaluated" : "Reuse boundary reached"}</b></div>
       <div><span>AUTHORITY</span><b>${phase < 2 ? "Human evidence missing" : "Human role established"}</b></div>
       <div><span>RUNTIME</span><b>${live ? "Server-bound" : "Replay-only"}</b></div>
     </div>
