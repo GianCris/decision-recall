@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AnimatePresence, motion } from "motion/react";
 import "./styles.css";
+import Explorer from "./Explorer.jsx";
 import releaseEvidence from "./pc2-judge-safe-gemini-projection.json";
 import { AGENT_PROOF_DURATION_MS, AGENT_PROOF_REVEAL_SECONDS, agentProofVisibleForPhase } from "./agent-proof-state.js";
 import {
@@ -725,6 +726,7 @@ function App() {
           <div><b>DECISION RECALL</b><span>TEMPORAL OBSERVATORY</span></div>
         </div>
         <div className="top-actions">
+          <a className="explorer-entry" href="#explore">Explore Decision Recall</a>
           <button className="proof-button" onClick={() => setProofOpen((x) => !x)}>Why / Proof</button>
           <div className={`live-dot ${live ? "live" : "fallback"}`}>
             <span />{live ? "Cloud Run · live engine" : "deterministic replay"}
@@ -822,4 +824,14 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+function ProductSurface() {
+  const [exploring, setExploring] = useState(window.location.hash === "#explore");
+  useEffect(() => {
+    const navigate = () => setExploring(window.location.hash === "#explore");
+    window.addEventListener("hashchange", navigate);
+    return () => window.removeEventListener("hashchange", navigate);
+  }, []);
+  return exploring ? <Explorer /> : <App />;
+}
+
+createRoot(document.getElementById("root")).render(<ProductSurface />);

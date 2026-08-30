@@ -510,3 +510,49 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .app { overflow-x: auto; }
   .proof-button { display: none; }
 }
+
+/* Narrow flagship: keep the same content and phases in normal reading flow. */
+@media (max-width: 950px) {
+  .app { overflow: visible; }
+  .app .topbar { min-width: 0; flex-wrap: wrap; gap: 16px; }
+  .app .top-actions { flex-wrap: wrap; gap: 8px; }
+  .app .top-actions > * { min-height: 44px; display: inline-flex; align-items: center; }
+  .app .experience { min-width: 0; min-height: 0; height: auto; display: flex; flex-direction: column; gap: 18px; }
+  .app .scene-note { position: relative; inset: auto; order: -2; width: 100%; margin: 10px 0 0; }
+  .app .scene-note h1, .app .scene-note p { max-width: none; }
+  .app .scene-note h1 { line-height: 1.15; }
+  .app .observatory { position: relative; inset: auto; overflow: visible; display: flex; flex-direction: column; padding: 18px; border-radius: 22px; }
+  .app .time-axis { position: relative; inset: auto; margin-bottom: 20px; }
+  .app .decision-canvas { position: relative; inset: auto; height: auto; aspect-ratio: 1240 / 720; }
+  .app .gap-question, .app .boundary-hero,
+  .app .capture-gate-state, .app .later-world-records, .app .t1-disclosure {
+    position: relative; inset: auto; width: 100%; max-width: none; margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .app .gap-question { margin-top: 14px; }
+  .app .gap-question strong { font-size: 18px; line-height: 1.5; }
+  .app .capture-gate-state { order: -1; }
+  .app .later-world-records, .app .t1-disclosure { order: -1; }
+  .app .capture-state-change { flex-wrap: wrap; }
+  .app .boundary-hero { margin-top: 16px; }
+  .app .boundary-hero h2 { line-height: 1.1; }
+  .app .boundary-status { white-space: normal; line-height: 1.5; }
+  .app .scene-index { position: relative; inset: auto; align-self: center; }
+  .app .primary, .app .primary.pending, .app .primary.replay {
+    position: relative; inset: auto; transform: none; min-width: 0; width: 100%;
+    min-height: 48px; white-space: normal; line-height: 1.5; margin-bottom: 12px;
+  }
+  .app .primary:not(:disabled):hover, .app .primary:not(:disabled):active { transform: none; }
+  .app .agent-proof {
+    position: relative; inset: auto; translate: none; order: -1; width: 100%; min-height: 0;
+  }
+  .app .agent-proof-release, .app .agent-proof-live { grid-template-columns: 1fr; min-height: 0; padding: 20px; gap: 18px; }
+  .app .agent-proof-separator { height: auto; margin: 0 20px; }
+  .app .agent-proof-separator::before, .app .agent-proof-separator::after { flex: 0 0 12px; }
+  .app .agent-proof-separator span { flex: 1; line-height: 1.5; text-align: center; }
+  .app .agent-proof-gap { min-height: 0; padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--hairline); }
+  .app .authority-contrast { grid-template-columns: 1fr; gap: 8px; }
+  .app .authority-contrast > em { text-align: center; }
+  .app .authority-contrast p { min-height: 0; }
+  .app .proof-drawer { overflow-y: auto; }
+}

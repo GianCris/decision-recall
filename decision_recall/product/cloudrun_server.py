@@ -29,6 +29,7 @@ from .golden_loop import (
     run_golden_decision,
 )
 from .presentation import build_decision_threads_presentation
+from .case_api import CaseBindingMismatch, UnknownCase, registered_case_api
 
 
 _DIST_ROOT = Path(
@@ -304,6 +305,86 @@ def complete_verified_reevaluation(payload: object) -> dict[str, object]:
 
 
 class DecisionRecallHandler(BaseHTTPRequestHandler):
+    # Optional server-owned dependency injection, never request-selected config.
+    case_api = None
+
+    def _handle_cases(self, method: str, path: str) -> None:
+        api = self.case_api if self.case_api is not None else registered_case_api()
+        parts = path.split("/")
+
+        def reject_route(status, message):
+            # Consume a bounded, length-delimited body before an early rejection.
+            # Otherwise a headers-first client can race the HTTP/1.0 socket close.
+            lengths = self.headers.get_all("Content-Length", [])
+            if (method == "POST" and len(lengths) == 1 and len(lengths[0]) <= 20
+                    and lengths[0].isdigit() and not self.headers.get("Transfer-Encoding")):
+                size = int(lengths[0])
+                if 0 < size <= _MAX_REEVALUATE_BODY_BYTES:
+                    self.rfile.read(size)
+            self._send_json({"status": "error", "message": message}, status)
+
+        if path == "/api/cases":
+            if method == "GET":
+                self._send_json(api.cases())
+            else:
+                reject_route(HTTPStatus.METHOD_NOT_ALLOWED, "method not allowed")
+            return
+        if len(parts) != 5 or not parts[3] or parts[4] not in {"capture-preparation", "capture", "reevaluate"}:
+            reject_route(HTTPStatus.NOT_FOUND, "unknown case route")
+            return
+        decision_id, operation = unquote(parts[3]), parts[4]
+        if method != ("GET" if operation == "capture-preparation" else "POST"):
+            reject_route(HTTPStatus.METHOD_NOT_ALLOWED, "method not allowed")
+            return
+        try:
+            if method == "GET":
+                result = api.preparation(decision_id)
+            else:
+                if self.headers.get_content_type() != "application/json" or self.headers.get("Transfer-Encoding"):
+                    reject_route(HTTPStatus.BAD_REQUEST, "expected length-delimited application/json")
+                    return
+                lengths = self.headers.get_all("Content-Length", [])
+                if len(lengths) != 1:
+                    raise ValueError("one Content-Length is required")
+                size = int(lengths[0])
+                maximum = _MAX_CAPTURE_BODY_BYTES if operation == "capture" else _MAX_REEVALUATE_BODY_BYTES
+                if size <= 0:
+                    raise ValueError("request body size is invalid")
+                if size > maximum:
+                    self._send_json({"status": "error", "message": "request body exceeds the endpoint limit"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return
+
+                def unique_object(pairs):
+                    obj = {}
+                    for key, value in pairs:
+                        if key in obj:
+                            raise ValueError("duplicate JSON field")
+                        obj[key] = value
+                    return obj
+
+                def reject_constant(value):
+                    raise ValueError("non-finite JSON number")
+
+                payload = json.loads(self.rfile.read(size).decode("utf-8"),
+                                     object_pairs_hook=unique_object, parse_constant=reject_constant)
+                result = api.capture(decision_id, payload) if operation == "capture" else api.reevaluate(decision_id, payload)
+        except UnknownCase as exc:
+            self._send_json({"status": "error", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+            return
+        except CaseBindingMismatch as exc:
+            self._send_json({"status": "error", "message": str(exc)}, HTTPStatus.CONFLICT)
+            return
+        except TemporalIntegrityError as exc:
+            self._send_json({"status": "error", "message": str(exc)}, HTTPStatus.UNPROCESSABLE_ENTITY)
+            return
+        except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+            self._send_json({"status": "error", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except Exception:
+            self._send_json({"status": "error", "message": "registered case request failed"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._send_json(result)
+
     server_version = "DecisionRecallCloudRun/0.3"
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -353,6 +434,10 @@ class DecisionRecallHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlparse(self.path).path
 
+        if path == "/api/cases" or path.startswith("/api/cases/"):
+            self._handle_cases("GET", path)
+            return
+
         if path in {"/health", "/healthz"}:
             self._send_json(
                 {
@@ -393,6 +478,9 @@ class DecisionRecallHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlparse(self.path).path
+        if path == "/api/cases" or path.startswith("/api/cases/"):
+            self._handle_cases("POST", path)
+            return
         if path not in {"/api/capture", "/api/reevaluate"}:
             self._method_not_allowed()
             return
@@ -468,6 +556,14 @@ class DecisionRecallHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"cloudrun http: {format % args}")
+
+
+def handler_for_cases(api):
+    """Construct the same HTTP handler with an explicit server-owned case registry."""
+    class ConfiguredDecisionRecallHandler(DecisionRecallHandler):
+        case_api = api
+
+    return ConfiguredDecisionRecallHandler
 
 
 def main() -> None:
