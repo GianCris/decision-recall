@@ -4,7 +4,7 @@
 
 AI systems may remember records and decisions, but recalled evidence does not by itself establish **why a decision was made**, **what still applies now**, or **whether the surviving rationale is sufficient for reuse**.
 
-Decision Recall preserves those boundaries.
+Decision Recall separates what was established then, what still applies now, and whether there is enough authority to reuse the decision. When a required relation is missing, it asks for that relation instead of inventing it.
 
 > **Gemini interprets. Decision Recall authorizes.**
 
@@ -12,9 +12,9 @@ Decision Recall preserves those boundaries.
 
 **Public judge demo · no login required**
 
-The deployed demonstration follows one supplier-resilience decision, `D-104`. Its live interaction runs through a deterministic Decision Recall runtime and server-bound Capture Gate on Cloud Run. The live **YES** action does not call Gemini.
+The deployed demonstration follows one supplier-resilience decision, `D-104`. Live capture and later-world reevaluation run through the deterministic Decision Recall runtime on Cloud Run. The live **YES** and T1 paths do not call Gemini.
 
-## The Operational Problem
+## Why This Matters
 
 Given the available decision records, Decision Recall separates known facts from authorized rationale, identifies the unresolved required relation under the assigned profile, requests the missing human authority, and reevaluates later evidence without rewriting history.
 
@@ -25,6 +25,14 @@ Without that authority structure, later decision reuse can require manually reco
 - what was never established;
 - what changed later; and
 - whether the surviving rationale is sufficient for reuse.
+
+## What Decision Recall Changes
+
+Three boundaries that ordinary recall alone does not establish are kept separate:
+
+- **Interpretation is not authority.** Gemini can propose what supplied evidence means; Decision Recall controls what it may establish.
+- **Historical authority is not current applicability.** A reason may have influenced the original decision even after the world changes.
+- **Current applicability is not reuse sufficiency.** A surviving reason may still be insufficient to authorize reuse.
 
 ## How the Deployed D-104 Demonstration Works
 
@@ -46,7 +54,9 @@ LATER-WORLD EVIDENCE CHANGES → APPLICABILITY REEVALUATED
 REUSE SUFFICIENCY WAS NEVER ESTABLISHED → STOP
 ```
 
-In the separately release-proven interpretation path, Gemini maps human-readable decision records into bounded candidates. In the live judge path, Decision Recall deterministically reconstructs the issued state, identifies the unresolved required relation, and asks for the human authority it cannot infer. After verified capture, historical rationale remains recorded while current applicability is evaluated separately.
+In the separately release-proven interpretation path, Gemini maps human-readable decision records into bounded candidates. In the live judge path, Decision Recall reconstructs the issued state, identifies the unresolved required relation, and asks for the human authority it cannot infer. The server verifies that the response is bound to the issued session, gap, and exact question before the historical relation becomes established.
+
+T1 is **supplied, simulated later-world evidence**: Apex no longer matches while Beacon's restart delay still does. Historical authority remains established, while current applicability is reevaluated. Because the separate reuse-sufficiency relation was never established, D-104 returns `INSUFFICIENT_EVIDENCE` and stops rather than fabricating completion.
 
 ## More Than Retrieval or Memory
 
@@ -90,7 +100,7 @@ The release-evidence lane and live Cloud Run lane belong to the same D-104 decis
 
 ### Live Cloud Run Proof of Action
 
-The public `.run.app` demonstration shows this live path:
+The public `.run.app` demonstration shows two live, server-derived actions:
 
 ```text
 POST /api/capture
@@ -98,6 +108,12 @@ POST /api/capture
 → verifies capture session + gap + question binding
 → permits deterministic completion only after verification
 → historical relation becomes established
+
+POST /api/reevaluate
+→ server validates supplied T1 evidence policy
+→ reconstructs the established historical state
+→ reevaluates current applicability
+→ returns INSUFFICIENT_EVIDENCE because reuse sufficiency is missing
 ```
 
 The browser returns a declaration; it does not write authoritative history. Cloud Run hosts the Capture Gate and deterministic runtime that enforce that boundary.
@@ -116,6 +132,19 @@ This is release evidence for three predefined cases, **not a general robustness 
 
 The raw credentialed artifact remains local and untracked. The committed [release manifest](artifacts/pc2-credentialed-release-evidence.json) preserves its SHA-256 identity, and the committed [judge-safe projection](apps/decision-threads/src/pc2-judge-safe-gemini-projection.json) exposes only the allowlisted evidence used by the winner presentation.
 
+### Frozen Validation Evidence
+
+- Frontend tests: **16 passed**.
+- Focused backend regression: **41 passed**.
+- Full Python suite: **382 passed, 12 skipped, 0 failed**.
+- Official frontend production build: **PASS**.
+- Deployed `/api/capture`: **PASS**.
+- Deployed `/api/reevaluate`: **PASS**.
+- Cloud Run revision: `decision-recall-00011-l6k`.
+- Artifact Registry image digest: `sha256:4affef72e4333adf32a9703dc09f864320342c248fd0e4dbd6ca24ec7f27229f`.
+
+The revision and digest identify the validated deployment artifacts; they are not presented as proof that the container digest cryptographically derives from a Git commit.
+
 ## Generalization Truth
 
 | Level | What exists |
@@ -131,7 +160,9 @@ DR-Bench is a separate research/evaluation harness. It does **not** constitute 1
 - The submission demonstrates one deployed D-104 golden case, not broad cross-domain superiority.
 - The deployed demonstration uses in-memory temporal state; it does not claim restart-persistent Cloud decision memory.
 - Gemini release evidence is separate from the live Capture Gate interaction; the live **YES** action does not call Gemini.
-- Enterprise-scale performance, autonomous external monitoring, and broad RAG or recovery superiority are not claimed.
+- T1 uses supplied demo later-world records, not autonomous source monitoring or an authenticated enterprise system.
+- Structurally admitted Gemini candidates can still be semantically wrong; deterministic grounding and policy checks do not prove arbitrary model interpretations correct.
+- Enterprise-scale performance, multi-user persistence, and broad RAG or cross-domain superiority are not claimed.
 
 ## Run Locally
 
