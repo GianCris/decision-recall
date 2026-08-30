@@ -1,0 +1,31 @@
+FROM python:3.11-slim AS state
+
+WORKDIR /src
+COPY pyproject.toml README.md ./
+COPY decision_recall ./decision_recall
+RUN python -m pip install --no-cache-dir -e .
+COPY apps/decision-threads ./apps/decision-threads
+RUN python -m decision_recall.product.presentation_export --output apps/decision-threads/public/demo-state.json
+RUN mkdir -p apps/decision-threads/public/proof
+COPY artifacts/pc2-credentialed-release-evidence.json apps/decision-threads/public/proof/pc2-credentialed-release-evidence.json
+
+FROM node:24-slim AS web
+
+WORKDIR /src/apps/decision-threads
+COPY --from=state /src/apps/decision-threads ./
+RUN npm ci --no-audit --no-fund \
+    && npm exec vite build
+
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY decision_recall ./decision_recall
+RUN python -m pip install --no-cache-dir -e .
+COPY --from=web /src/apps/decision-threads/dist ./apps/decision-threads/dist
+
+ENV PORT=8080
+ENV DECISION_THREADS_DIST=/app/apps/decision-threads/dist
+EXPOSE 8080
+
+CMD ["python", "-m", "decision_recall.product.cloudrun_server"]

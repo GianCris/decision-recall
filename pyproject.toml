@@ -3,17 +3,27 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dr-bench"
+name = "decision-recall"
 version = "0.1.0"
-description = "A mechanism-agnostic benchmark for decision recovery"
+description = "Temporal epistemic control for long-running AI decisions, with DR-Bench evaluation tooling"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "google-auth==2.56.3",
+  "google-genai==2.14.0",
+  "httpx==0.28.1",
+  "SQLAlchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+]
 
 [project.scripts]
 dr-bench = "dr_bench.cli:main"
+dr-baseline-sanity = "dr_baselines.sanity:main"
+dr-baseline-structured-sanity = "dr_baselines.structured_sanity:main"
+dr-baseline-pilot = "dr_baselines.pilot:main"
+dr-baseline-dev = "dr_baselines.dev_experiment:main"
 
 [tool.setuptools.packages.find]
-include = ["dr_bench*"]
+include = ["dr_bench*", "dr_baselines*", "decision_recall*"]
 
 [tool.setuptools.package-data]
 dr_bench = ["data/*.json", "data/*.jsonl", "schema/*.json"]

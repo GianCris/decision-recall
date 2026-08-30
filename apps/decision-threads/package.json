@@ -1,0 +1,20 @@
+{
+  "name": "decision-recall-winner-slice",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "state": "cd ../.. && python -m decision_recall.product.presentation_export --output apps/decision-threads/public/demo-state.json",
+    "dev": "npm run state && vite",
+    "build": "npm run state && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "6.1.0",
+    "vite": "8.2.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "motion": "13.1.1"
+  },
+  "devDependencies": {}
+}

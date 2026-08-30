@@ -1,0 +1,146 @@
+name: Decision Recall Core
+
+on:
+  push:
+    branches:
+      - agent/decision-recall-core-v0.1
+  pull_request:
+    paths:
+      - 'decision_recall/**'
+      - 'apps/decision-threads/**'
+      - 'dr_bench/**'
+      - 'dr_baselines/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/decision-recall-core.yml'
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: decision_recall_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d decision_recall_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DECISION_RECALL_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/decision_recall_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install repository package
+        run: python -m pip install -e .
+
+      - name: Run Decision Recall M1, M2, M2.1, Product Checkpoints, Cloud capture gate, and PostgreSQL parity tests
+        run: |
+          python -m unittest -v \
+            tests/test_decision_recall_milestone1.py \
+            tests/test_decision_recall_milestone2.py \
+            tests/test_decision_recall_milestone2_integration.py \
+            tests/test_decision_recall_postgres.py \
+            tests/test_decision_recall_m21.py \
+            tests/test_decision_recall_m21_postgres.py \
+            tests/test_decision_recall_product_golden_loop.py \
+            tests/test_decision_recall_product_slot_origin.py \
+            tests/test_decision_recall_product_gemini_compiler.py \
+            tests/test_decision_recall_pc2_integration.py \
+            tests/test_decision_recall_structured_declaration.py \
+            tests/test_decision_recall_pc2_release_gate.py \
+            tests/test_decision_recall_cloudrun_capture_gate.py
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install repository package
+        run: python -m pip install -e .
+
+      - name: Install Decision Threads dependencies
+        working-directory: apps/decision-threads
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Decision Threads
+        working-directory: apps/decision-threads
+        run: npm run build
+
+  repository-offline-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install repository package
+        run: python -m pip install -e .
+
+      - name: Run deterministic/offline repository regression excluding dedicated Decision Recall suites
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          excluded = {
+              'test_decision_recall_milestone1.py',
+              'test_decision_recall_milestone2.py',
+              'test_decision_recall_milestone2_integration.py',
+              'test_decision_recall_postgres.py',
+              'test_decision_recall_m21.py',
+              'test_decision_recall_m21_postgres.py',
+              'test_decision_recall_product_golden_loop.py',
+              'test_decision_recall_product_slot_origin.py',
+              'test_decision_recall_product_gemini_compiler.py',
+              'test_decision_recall_pc2_integration.py',
+              'test_decision_recall_structured_declaration.py',
+              'test_decision_recall_pc2_release_gate.py',
+              'test_decision_recall_cloudrun_capture_gate.py',
+              'test_dev_autopsy.py',
+              'test_pauto_provider_probe.py',
+              'test_round_b_recovered_analysis.py',
+          }
+
+          files = [
+              str(path)
+              for path in sorted(Path('tests').glob('test_*.py'))
+              if path.name not in excluded
+          ]
+          print('Offline non-core regression files:', len(files))
+          result = subprocess.run(
+              [sys.executable, '-m', 'unittest', '-v', *files],
+              check=False,
+          )
+          raise SystemExit(result.returncode)
+          PY

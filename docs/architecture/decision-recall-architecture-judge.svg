@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Decision Recall judge-facing architecture</title>
+  <desc id="desc">A separate release-proven Gemini lane maps supplied decision records into bounded interpretation. A live deterministic Decision Recall core on Cloud Run grounds candidates, identifies missing authority, asks one exact human clarification, preserves historical authority, reevaluates supplied later-world evidence, and stops D-104 because reuse sufficiency was never established.</desc>
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fcfaf5"/><stop offset=".58" stop-color="#f7f3ea"/><stop offset="1" stop-color="#efe8db"/></linearGradient>
+    <radialGradient id="field" cx="58%" cy="52%" r="55%"><stop offset="0" stop-color="#dcebe5" stop-opacity=".72"/><stop offset=".58" stop-color="#eef2eb" stop-opacity=".2"/><stop offset="1" stop-color="#f8f4ec" stop-opacity="0"/></radialGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#183149"/><stop offset="1" stop-color="#071421"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#172335" flood-opacity=".11"/></filter>
+    <marker id="navyArrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M1 1l8 4.5L1 10z" fill="#253c53"/></marker>
+    <marker id="greenArrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M1 1l8 4.5L1 10z" fill="#16775d"/></marker>
+    <marker id="amberArrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M1 1l8 4.5L1 10z" fill="#b16a18"/></marker>
+    <style>
+      text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#142438}.caps{font-size:15px;font-weight:800;letter-spacing:2.3px}.title{font-size:25px;font-weight:800}.body{font-size:17px;fill:#52616d}.micro{font-size:13px;fill:#6f7b84}.box{fill:#fffdf8;stroke:#d7cfc1;stroke-width:1.5}.release{stroke:#6d879d}.live{stroke:#238267}.uncertain{stroke:#bd771f}.navyLine{fill:none;stroke:#253c53;stroke-width:2.4}.greenLine{fill:none;stroke:#16775d;stroke-width:2.7}.amberLine{fill:none;stroke:#b16a18;stroke-width:2.5}.dash{stroke-dasharray:8 8}.inverse{fill:#fff}.inverseSub{fill:#bdcbd5}
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#paper)"/><circle cx="1180" cy="555" r="610" fill="url(#field)"/>
+  <g opacity=".22" fill="none" stroke="#9eaaa9"><circle cx="1110" cy="570" r="345"/><circle cx="1110" cy="570" r="470"/><path d="M60 570H1860" stroke-dasharray="2 14"/></g>
+  <g transform="translate(66 43)"><circle cx="28" cy="28" r="28" fill="#101e2d"/><text x="28" y="35" class="inverse" font-size="17" font-weight="800" text-anchor="middle">DR</text><text x="78" y="24" font-size="22" font-weight="800" letter-spacing="4.5">DECISION RECALL</text><text x="78" y="49" font-size="12" font-weight="750" letter-spacing="3.7" fill="#a65d1a">TEMPORAL AUTHORITY</text></g>
+  <text x="1085" y="61" text-anchor="middle" font-size="36" font-weight="850">MEMORY IS NOT AUTHORITY.</text>
+  <text x="1085" y="100" text-anchor="middle" font-size="23" fill="#52616d">Gemini interprets. Decision Recall authorizes.</text>
+
+  <!-- Release-proven interpretation lane -->
+  <rect x="62" y="145" width="500" height="815" rx="30" fill="#fbfaf6" stroke="#b9c5cd" stroke-width="1.7"/>
+  <text x="95" y="184" class="caps" fill="#405f79">RELEASE-PROVEN INTERPRETATION</text><text x="95" y="210" class="micro">Separate verified path · not the live YES/T1 request</text><line x1="95" y1="230" x2="525" y2="230" stroke="#738ca1" stroke-width="2"/>
+  <g filter="url(#shadow)">
+    <rect class="box release" x="102" y="280" width="420" height="112" rx="20"/><text x="312" y="320" text-anchor="middle" class="caps">SUPPLIED DECISION RECORDS</text><text x="312" y="355" text-anchor="middle" class="body">Human-readable evidence</text>
+    <rect class="box release" x="102" y="460" width="420" height="146" rx="20"/><text x="312" y="500" text-anchor="middle" class="caps">GEMINI 3.7 FLASH</text><text x="312" y="535" text-anchor="middle" class="body">Maps supplied evidence into</text><text x="312" y="561" text-anchor="middle" class="body">bounded interpretation</text><text x="312" y="588" text-anchor="middle" class="micro">Google GenAI SDK · credentialed release evidence</text>
+    <rect x="102" y="672" width="420" height="164" rx="22" fill="#f3f6f7" stroke="#5d7a92" stroke-width="1.8"/><text x="312" y="715" text-anchor="middle" class="caps" fill="#405f79">INTERPRETATION</text><text x="312" y="758" text-anchor="middle" class="title">Candidate evidence</text><text x="312" y="795" text-anchor="middle" font-size="22" font-weight="800" fill="#ae6618">NOT AUTHORITY</text><text x="312" y="821" text-anchor="middle" class="micro">bounded semantic candidates only</text>
+  </g>
+  <path class="navyLine dash" d="M312 392V447" marker-end="url(#navyArrow)"/><path class="navyLine dash" d="M312 606V659" marker-end="url(#navyArrow)"/>
+  <text x="312" y="904" text-anchor="middle" class="caps" fill="#a65d1a">INTERPRETATION ≠ AUTHORITY</text>
+
+  <!-- Live Cloud Run server envelope -->
+  <rect x="620" y="145" width="860" height="825" rx="34" fill="#f9f8f3" fill-opacity=".54" stroke="#86a4b5" stroke-width="2" stroke-dasharray="10 9"/>
+  <rect x="655" y="126" width="330" height="43" rx="22" fill="#f1eee6" stroke="#c9c3b8"/><text x="820" y="153" text-anchor="middle" class="caps" fill="#116d56">LIVE · GOOGLE CLOUD RUN</text><text x="1450" y="154" text-anchor="end" class="micro">server-bound deterministic authority path</text>
+  <g filter="url(#shadow)">
+    <rect x="700" y="226" width="700" height="155" rx="34" fill="url(#core)" stroke="#496980" stroke-width="2"/><text x="1050" y="267" text-anchor="middle" class="inverse" font-size="15" font-weight="800" letter-spacing="2.8">DECISION RECALL CORE</text><text x="1050" y="313" text-anchor="middle" class="inverse" font-size="30" font-weight="850">GROUNDS EVIDENCE · CONTROLS AUTHORITY</text><text x="1050" y="348" text-anchor="middle" class="inverseSub" font-size="18">canonical identity · contract checks · missing-relation selection</text>
+    <rect class="box live" x="700" y="506" width="410" height="130" rx="22"/><text x="905" y="547" text-anchor="middle" class="caps" fill="#147259">HISTORICAL AUTHORITY</text><text x="905" y="588" text-anchor="middle" class="title">What was established then</text><text x="905" y="616" text-anchor="middle" class="micro">Historical role remains established</text>
+    <rect class="box live" x="865" y="704" width="470" height="116" rx="22"/><text x="1100" y="746" text-anchor="middle" class="caps" fill="#147259">CURRENT APPLICABILITY</text><text x="1100" y="785" text-anchor="middle" class="title">What still matches now</text>
+    <rect class="box uncertain" x="865" y="860" width="470" height="92" rx="22"/><text x="1100" y="897" text-anchor="middle" class="caps" fill="#a86218">REUSE SUFFICIENCY</text><text x="1100" y="931" text-anchor="middle" font-size="19" font-weight="700">Is surviving authorized support enough?</text>
+  </g>
+
+  <!-- Release candidates enter deterministic admission, not live Gemini execution -->
+  <path class="navyLine dash" d="M522 754H610q35 0 35-35V304h42" marker-end="url(#navyArrow)"/>
+  <rect x="520" y="650" width="224" height="54" rx="27" fill="#f8f5ee" stroke="#9eacb5"/><text x="632" y="673" text-anchor="middle" font-size="12" font-weight="800" letter-spacing="1.2">DETERMINISTICALLY GROUNDED ·</text><text x="632" y="692" text-anchor="middle" font-size="12" font-weight="800" letter-spacing="1.2">CONTRACT-CHECKED</text>
+
+  <!-- Browser and human remain outside server authority -->
+  <text x="1665" y="184" text-anchor="middle" class="caps" fill="#a86218">BROWSER + HUMAN</text><text x="1665" y="209" text-anchor="middle" class="micro">outside the server authority boundary</text>
+  <g filter="url(#shadow)"><rect x="1520" y="246" width="340" height="155" rx="26" fill="#fff8e9" stroke="#bd771f" stroke-width="1.8"/><text x="1690" y="287" text-anchor="middle" class="caps" fill="#a86218">EXACT HUMAN CLARIFICATION</text><text x="1690" y="328" text-anchor="middle" font-size="20" font-weight="800">Only the missing relation</text><text x="1690" y="360" text-anchor="middle" class="body">issued question + response</text><text x="1690" y="384" text-anchor="middle" class="micro">browser cannot establish authority</text></g>
+  <path class="amberLine" d="M1400 285H1506" marker-end="url(#amberArrow)"/><text x="1453" y="264" text-anchor="middle" class="micro">cannot be inferred</text>
+  <path class="greenLine" d="M1520 365H1460q-35 0-35 35v42q0 35-35 35H1100q-35 0-35-35v-48" marker-end="url(#greenArrow)"/>
+  <rect x="1260" y="424" width="300" height="49" rx="24" fill="#f6f2e9" stroke="#8fb3a6"/><text x="1410" y="445" text-anchor="middle" font-size="12" font-weight="800" letter-spacing="1.15">CAPTURE GATE · SERVER VERIFIED</text><text x="1410" y="463" text-anchor="middle" class="micro">issued question + response binding</text>
+
+  <!-- The same core establishes historical authority -->
+  <path class="greenLine" d="M905 381V493" marker-end="url(#greenArrow)"/><text x="919" y="449" class="micro">deterministic completion may establish</text>
+
+  <!-- Independent later-world input -->
+  <g filter="url(#shadow)"><rect x="1520" y="506" width="340" height="130" rx="22" fill="#fffdf8" stroke="#778d99" stroke-width="1.7"/><text x="1690" y="546" text-anchor="middle" class="caps">SUPPLIED LATER-WORLD EVIDENCE</text><text x="1690" y="583" text-anchor="middle" class="body">Current demo records</text><text x="1690" y="612" text-anchor="middle" class="micro">server policy validated · not monitoring</text></g>
+
+  <!-- Historical state and later input converge without rewriting history -->
+  <path class="greenLine" d="M905 636V662q0 34 34 34h131" marker-end="url(#greenArrow)"/>
+  <path class="navyLine" d="M1520 571H1452q-34 0-34 34v99q0 48-48 48h-22" marker-end="url(#navyArrow)"/><text x="1450" y="675" text-anchor="middle" class="micro">independent current input</text>
+  <rect x="830" y="645" width="540" height="42" rx="21" fill="#f7f3ea" fill-opacity=".96"/>
+  <text x="1100" y="672" text-anchor="middle" class="caps" fill="#61707b">HISTORICAL AUTHORITY ≠ CURRENT APPLICABILITY</text>
+  <path class="amberLine" d="M1100 820V847" marker-end="url(#amberArrow)"/>
+  <text x="1370" y="794" class="caps" fill="#a86218">CURRENT APPLICABILITY ≠ REUSE SUFFICIENCY</text><text x="1370" y="821" class="body">A reason may still match without being sufficient alone.</text>
+
+  <!-- Demonstrated D-104 outcome -->
+  <g filter="url(#shadow)"><rect x="1518" y="848" width="342" height="118" rx="28" fill="#fff7e8" stroke="#bc721b" stroke-width="2"/><text x="1689" y="883" text-anchor="middle" class="caps" fill="#a86218">DEMONSTRATED D-104 OUTCOME</text><text x="1689" y="923" text-anchor="middle" font-size="25" font-weight="850" fill="#9d5c14">INSUFFICIENT → STOP</text><text x="1689" y="950" text-anchor="middle" class="micro">sufficiency never established · C1 trace</text></g>
+  <path class="amberLine" d="M1335 906H1505" marker-end="url(#amberArrow)"/><text x="1420" y="888" text-anchor="middle" class="micro">Beacon still matches</text>
+
+  <!-- Secondary engine capability, not a live-demo claim -->
+  <g transform="translate(80 1013)"><text class="micro">Canonical engine outcomes:</text><text x="190" class="micro" font-weight="800" fill="#16775d">AUTHORIZED</text><text x="294" class="micro">·</text><text x="310" class="micro" font-weight="800">NOT AUTHORIZED</text><text x="440" class="micro">·</text><text x="456" class="micro" font-weight="800" fill="#a86218">INSUFFICIENT</text><text x="664" class="micro">Engine capability · only insufficient is demonstrated above.</text></g>
+  <text x="1848" y="1027" text-anchor="end" font-size="19" font-weight="850" fill="#9d5c14">WHAT WAS NEVER ESTABLISHED STAYS UNESTABLISHED.</text>
+</svg>
