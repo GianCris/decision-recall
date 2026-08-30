@@ -99,7 +99,7 @@ def _historical_state(completion):
 class RegisteredCaseAPI:
     """Registry/plans are server-owned; all mutable lifecycle objects are local."""
 
-    def __init__(self, *, decisions, candidate_plans):
+    def __init__(self, *, decisions, candidate_plans, example_observations=None):
         plans = {}
         for plan in candidate_plans:
             if plan.decision_id in plans:
@@ -114,6 +114,14 @@ class RegisteredCaseAPI:
             plans[plan.decision_id] = plan
         self._decisions = decisions
         self._plans = MappingProxyType(plans)
+        examples = {}
+        for decision_id, example in (example_observations or {}).items():
+            self._resolve(decision_id)
+            _exact_object(example, {"world_time", "observations"}, "example observations")
+            world_time = _timestamp(example["world_time"])
+            observations = self._observations(decision_id, example["observations"], world_time)
+            examples[decision_id] = json.dumps({"world_time": world_time.isoformat(), "observations": observations})
+        self._examples = MappingProxyType(examples)
 
     def _resolve(self, decision_id):
         if decision_id not in self._plans:
@@ -153,6 +161,11 @@ class RegisteredCaseAPI:
             "question": p.critical_gaps[0].question,
             "metric_schema": list(_metric_schema(definition)),
             "observation_source_mode": OBSERVATION_SOURCE_MODE,
+            "example_observations": json.loads(self._examples[decision_id]) if decision_id in self._examples else None,
+            "current_match_labels": {
+                rule.id: next(claim.predicate_key.replace("_", " ") for claim in p.draft_contract.claims if claim.id == rule.premise_id)
+                for rule in p.draft_contract.current_match_rules
+            },
         }
 
     def _verified_completion(self, decision_id, payload):
@@ -253,5 +266,7 @@ class RegisteredCaseAPI:
 def registered_case_api():
     from .candidate_plans import registered_candidate_plans
     from .registered_decisions import registered_decisions
+    from .example_observations import registered_example_observations
 
-    return RegisteredCaseAPI(decisions=registered_decisions(), candidate_plans=registered_candidate_plans())
+    return RegisteredCaseAPI(decisions=registered_decisions(), candidate_plans=registered_candidate_plans(),
+                             example_observations=registered_example_observations())
